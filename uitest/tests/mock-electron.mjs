@@ -106,6 +106,12 @@ export const _electron = {
         observation.closed = true;
         save();
         if (mode === 'hang') return new Promise(() => {});
+        if (mode === 'delayed-close') {
+          child.exitCode = 7;
+          child.emit('exit');
+          setTimeout(stopped, 50);
+          throw new Error('Fabricated close rejection after child exit');
+        }
         if (mode === 'leader-exit') {
           child.exitCode = 7;
           child.emit('exit');

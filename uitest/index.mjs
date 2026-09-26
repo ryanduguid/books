@@ -38,7 +38,10 @@ async function closeApp(electronApp, child, resourcesClosed) {
   } catch (error) {
     process.exitCode ||= 1;
     console.error(error);
-    if (!alive()) throw error;
+    if (!alive()) {
+      await withinDeadline(resourcesClosed);
+      return;
+    }
     if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
       throw new Error('Cannot stop Electron without its owned process id');
     }
