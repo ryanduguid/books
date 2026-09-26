@@ -37,6 +37,9 @@ jobs:
       - name: Check Settings Validation
         run: yarn test:settings
 
+      - name: Check Development Validation
+        run: yarn test:development-validation
+
       - name: Run Tests
         run: yarn test
 
