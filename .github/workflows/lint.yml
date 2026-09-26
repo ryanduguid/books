@@ -2,7 +2,7 @@ name: Lint
 
 on:
   push:
-    branches: [$default-branch]
+    branches: [master]
     paths-ignore:
       - '**.md'
   pull_request:
