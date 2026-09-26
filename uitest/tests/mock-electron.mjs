@@ -22,6 +22,7 @@ function stopped() {
   );
   save();
   child.emit('exit');
+  child.emit('close');
 }
 
 export function forceStop(pid, signal) {
@@ -30,6 +31,11 @@ export function forceStop(pid, signal) {
   observation.forced = true;
   save();
   if (mode === 'kill-error') throw new Error('Fabricated termination failure');
+  if (mode === 'partial-kill') {
+    child.exitCode = 7;
+    child.emit('exit');
+    throw new Error('Fabricated partial termination failure');
+  }
   if (mode === 'kill-timeout') return;
   child.signalCode = 'SIGKILL';
   stopped();
@@ -81,7 +87,15 @@ export const _electron = {
     if (mode === 'exit') process.exit(7);
     if (mode === 'launch') throw new Error('Fabricated launch failure');
     process.kill = forceStop;
-    if (['hang', 'kill-error', 'kill-timeout'].includes(mode))
+    if (
+      [
+        'hang',
+        'kill-error',
+        'kill-timeout',
+        'leader-exit',
+        'partial-kill',
+      ].includes(mode)
+    )
       keepAlive = setInterval(() => {}, 1000);
     return {
       async firstWindow() {
@@ -92,7 +106,16 @@ export const _electron = {
         observation.closed = true;
         save();
         if (mode === 'hang') return new Promise(() => {});
-        if (['close', 'kill-error', 'kill-timeout'].includes(mode))
+        if (mode === 'leader-exit') {
+          child.exitCode = 7;
+          child.emit('exit');
+          throw new Error(
+            'Fabricated leader exit with open descendant streams'
+          );
+        }
+        if (
+          ['close', 'kill-error', 'kill-timeout', 'partial-kill'].includes(mode)
+        )
           throw new Error('Fabricated close failure');
         child.exitCode =
           mode === 'child-exit' ? 7 : mode === 'child-signal' ? null : 0;

@@ -152,6 +152,8 @@ test('UI command preserves failures and cleans its isolated profile', (t) => {
       ['hang', 1],
       ['kill-error', 1],
       ['kill-timeout', 1],
+      ['leader-exit', 1],
+      ['partial-kill', 1],
     ]) {
       const log = path.join(directory, `${mode}.json`);
       const result = spawnSync(process.execPath, ['uitest/index.mjs'], {
@@ -210,7 +212,12 @@ test('UI command preserves failures and cleans its isolated profile', (t) => {
           `${mode}: isolated ${name}`
         );
       }
-      const retained = ['kill-error', 'kill-timeout'].includes(mode);
+      const retained = [
+        'kill-error',
+        'kill-timeout',
+        'leader-exit',
+        'partial-kill',
+      ].includes(mode);
       if (profile && path.dirname(profile) === temporaryRoot) {
         if (mode === 'exit') removeFixture(profile);
         else

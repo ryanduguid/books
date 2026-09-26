@@ -36,6 +36,7 @@ jobs:
 
   setup_and_uitest:
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - name: Setup node
         uses: actions/setup-node@v4

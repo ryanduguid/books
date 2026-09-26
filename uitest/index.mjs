@@ -1,7 +1,6 @@
 import path from 'path';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { once } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { _electron } from 'playwright';
@@ -31,34 +30,26 @@ async function withinDeadline(promise) {
   }
 }
 
-async function closeApp(electronApp, child) {
+async function closeApp(electronApp, child, resourcesClosed) {
   if (!electronApp) return;
   const alive = () => child.exitCode === null && child.signalCode === null;
-  const exited = alive() ? once(child, 'exit') : Promise.resolve();
   try {
-    await withinDeadline(Promise.all([electronApp.close(), exited]));
+    await withinDeadline(Promise.all([electronApp.close(), resourcesClosed]));
   } catch (error) {
     process.exitCode ||= 1;
     console.error(error);
-    if (alive()) {
-      if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
-        throw new Error('Cannot stop Electron without its owned process id');
-      }
-      try {
-        if (process.platform === 'win32') {
-          await execFileAsync(
-            'taskkill',
-            ['/PID', String(child.pid), '/T', '/F'],
-            { timeout: 5_000 }
-          );
-        } else {
-          process.kill(-child.pid, 'SIGKILL');
-        }
-      } catch (error) {
-        if (alive()) throw error;
-      }
-      await withinDeadline(exited);
+    if (!alive()) throw error;
+    if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
+      throw new Error('Cannot stop Electron without its owned process id');
     }
+    if (process.platform === 'win32') {
+      await execFileAsync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+        timeout: 5_000,
+      });
+    } else {
+      process.kill(-child.pid, 'SIGKILL');
+    }
+    await withinDeadline(resourcesClosed);
   }
   if (child.exitCode !== 0 || child.signalCode !== null) {
     process.exitCode ||= child.exitCode || 1;
@@ -98,6 +89,7 @@ async function run() {
 
   let electronApp;
   let child;
+  let resourcesClosed;
   try {
     await mkdir(temporaryPath);
     electronApp = await _electron.launch({
@@ -110,6 +102,7 @@ async function run() {
       timeout: 60_000,
     });
     child = electronApp.process();
+    resourcesClosed = new Promise((resolve) => child.once('close', resolve));
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(60_000);
     const test = tape.createHarness({ autoclose: true });
@@ -176,7 +169,7 @@ async function run() {
     await finished;
   } finally {
     try {
-      await closeApp(electronApp, child);
+      await closeApp(electronApp, child, resourcesClosed);
     } catch (error) {
       await new Promise(() => {
         process.stderr.write(
