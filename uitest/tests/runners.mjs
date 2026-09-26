@@ -153,6 +153,7 @@ test('UI command preserves failures and cleans its isolated profile', (t) => {
       ['kill-error', 1],
       ['kill-timeout', 1],
       ['leader-exit', 1],
+      ['delayed-close', 1],
       ['partial-kill', 1],
     ]) {
       const log = path.join(directory, `${mode}.json`);
