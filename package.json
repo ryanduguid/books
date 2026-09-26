@@ -19,6 +19,7 @@
     "test:runners": "node uitest/tests/runners.mjs",
     "test:assets": "node build/tests/assets.mjs",
     "test:updater": "node build/tests/updater.mjs",
+    "test:settings": "node build/tests/settings.mjs",
     "lint": "eslint . --ext ts,vue",
     "format": "prettier --write ."
   },
@@ -88,7 +89,8 @@
     "yargs": "^17.7.2"
   },
   "resolutions": {
-    "node-abi": "^3.54.0"
+    "node-abi": "^3.54.0",
+    "electron-store/**/ajv": "8.18.0"
   },
   "prettier": {
     "semi": true,

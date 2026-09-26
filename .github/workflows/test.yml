@@ -34,6 +34,9 @@ jobs:
       - name: Check Updater Redirects
         run: yarn test:updater
 
+      - name: Check Settings Validation
+        run: yarn test:settings
+
       - name: Run Tests
         run: yarn test
 
