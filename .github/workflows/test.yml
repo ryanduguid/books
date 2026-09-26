@@ -31,6 +31,9 @@ jobs:
       - name: Check Test Runners
         run: yarn test:runners
 
+      - name: Check Updater Redirects
+        run: yarn test:updater
+
       - name: Run Tests
         run: yarn test
 
