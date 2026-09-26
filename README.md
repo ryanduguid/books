@@ -147,6 +147,7 @@ Unit tests and shell runner regressions require zsh:
 yarn test:runners
 yarn test
 yarn build --nosign --nopackage
+yarn test:assets
 yarn uitest
 ```
 

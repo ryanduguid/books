@@ -55,5 +55,8 @@ jobs:
       - name: Build Source Files
         run: yarn build --nosign --nopackage
 
+      - name: Check Built Assets
+        run: yarn test:assets
+
       - name: Run UI Tests
         run: yarn uitest

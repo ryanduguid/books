@@ -17,6 +17,7 @@
     "test": "scripts/test.sh",
     "uitest": "node uitest/index.mjs",
     "test:runners": "node uitest/tests/runners.mjs",
+    "test:assets": "node build/tests/assets.mjs",
     "lint": "eslint . --ext ts,vue",
     "format": "prettier --write ."
   },

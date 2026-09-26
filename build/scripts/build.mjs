@@ -163,7 +163,7 @@ async function packageApp() {
 }
 
 /**
- * Removes leading slash from all renderer files
+ * Removes the leading slash from renderer text files.
  * electron uses a custom registered protocol to load the
  * files: "app://"
  *
@@ -178,7 +178,14 @@ function removeBaseLeadingSlash(dir, base) {
       continue;
     }
 
+    if (!/\.(css|html|js|json|map|mjs|svg|txt)$/i.test(file)) {
+      continue;
+    }
+
     const contents = fs.readFileSync(filePath).toString('utf-8');
-    fs.writeFileSync(filePath, contents.replaceAll('/' + base, base));
+    const updated = contents.replaceAll('/' + base, base);
+    if (updated !== contents) {
+      fs.writeFileSync(filePath, updated);
+    }
   }
 }
