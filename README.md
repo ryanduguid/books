@@ -152,8 +152,10 @@ yarn uitest
 
 The UI suite opens a fresh temporary profile and creates a fabricated company.
 Its configuration, database, session files and temporary files stay under that
-profile. After the app stops, the runner removes the profile. If it cannot
-confirm shutdown, it exits with a failure and prints the retained profile path.
+profile. After the app and its captured process streams close, the runner removes
+the profile. Unconfirmed shutdown marks the run as failed and retains the profile.
+Operating system cleanup or stalled output can still block local termination;
+the hosted UI job has a 15-minute timeout.
 Abruptly terminating the runner can also leave a temporary profile behind.
 
 ### Build
