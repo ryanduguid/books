@@ -139,7 +139,24 @@ visiting `chrome://inspect` while Frappe Books is running in dev mode.
 
 See more [here](https://www.electronjs.org/docs/latest/tutorial/debugging-main-process#external-debuggers).
 
-#### Build
+### Tests
+
+Unit tests and shell runner regressions require zsh:
+
+```bash
+yarn test:runners
+yarn test
+yarn build --nosign --nopackage
+yarn uitest
+```
+
+The UI suite opens a fresh temporary profile and creates a fabricated company.
+Its configuration, database, session files and temporary files stay under that
+profile. After the app stops, the runner removes the profile. If it cannot
+confirm shutdown, it exits with a failure and prints the retained profile path.
+Abruptly terminating the runner can also leave a temporary profile behind.
+
+### Build
 
 To build Frappe Books and create an installer:
 

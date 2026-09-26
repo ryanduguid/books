@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [$default-branch]
+    branches: [master]
     paths-ignore:
       - '**.md'
   pull_request:
@@ -27,6 +27,9 @@ jobs:
 
       - name: Install Dependencies
         run: yarn
+
+      - name: Check Test Runners
+        run: yarn test:runners
 
       - name: Run Tests
         run: yarn test
