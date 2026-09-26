@@ -20,6 +20,7 @@
     "test:assets": "node build/tests/assets.mjs",
     "test:updater": "node build/tests/updater.mjs",
     "test:settings": "node build/tests/settings.mjs",
+    "test:development-validation": "node build/tests/development-validation.mjs",
     "lint": "eslint . --ext ts,vue",
     "format": "prettier --write ."
   },
