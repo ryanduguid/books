@@ -1,4 +1,16 @@
 export async function resolve(specifier, context, nextResolve) {
+  if (
+    specifier === 'node:fs/promises' &&
+    ['launch-unsafe-cleanup', 'launch-rm-error'].includes(
+      process.env.BOOKS_TEST_CASE
+    ) &&
+    context.parentURL !== new URL('./mock-fs.mjs', import.meta.url).href
+  ) {
+    return {
+      shortCircuit: true,
+      url: new URL('./mock-fs.mjs', import.meta.url).href,
+    };
+  }
   if (specifier === 'node:child_process') {
     return {
       shortCircuit: true,

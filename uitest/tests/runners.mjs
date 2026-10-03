@@ -31,29 +31,63 @@ function removeFixture(directory) {
   fs.rmSync(directory, { recursive: true, force: true });
 }
 
+function prepareUnitFixture(directory) {
+  fs.mkdirSync(path.join(directory, 'scripts'));
+  fs.mkdirSync(path.join(directory, 'node_modules', '.bin'), {
+    recursive: true,
+  });
+  fs.copyFileSync(
+    path.join(root, 'scripts', 'test.sh'),
+    path.join(directory, 'scripts', 'test.sh')
+  );
+  fs.writeFileSync(
+    path.join(directory, 'scripts', 'runner.sh'),
+    '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > arguments.txt\nprintf "TAP version 13\\n"\nexit "$PRODUCER_STATUS"\n',
+    { mode: 0o755 }
+  );
+  fs.writeFileSync(
+    path.join(directory, 'node_modules', '.bin', 'tap-spec'),
+    '#!/usr/bin/env bash\nwhile IFS= read -r line; do :; done\nexit "$REPORTER_STATUS"\n',
+    { mode: 0o755 }
+  );
+}
+
+function runUnitFixture(directory, producer, reporter, args = []) {
+  return spawnSync(
+    process.env.BOOKS_TEST_SHELL || 'zsh',
+    ['scripts/test.sh', ...args],
+    {
+      cwd: directory,
+      env: {
+        ...env,
+        PRODUCER_STATUS: String(producer),
+        REPORTER_STATUS: String(reporter),
+      },
+      encoding: 'utf8',
+      timeout: 10_000,
+    }
+  );
+}
+
+function assertDefaultDiscovery(t, directory) {
+  const result = runUnitFixture(directory, 0, 0);
+  t.equal(result.status, 0, 'default discovery succeeds');
+  t.equal(
+    fs
+      .readFileSync(path.join(directory, 'arguments.txt'), 'utf8')
+      .trim()
+      .split('\n')[1],
+    './**/tests/**/*.spec.ts',
+    'Tape receives its recursive glob'
+  );
+}
+
 test('unit runner preserves failures and argument boundaries', (t) => {
   const directory = fs.mkdtempSync(
     path.join(temporaryRoot, 'books-runner-test-')
   );
   try {
-    fs.mkdirSync(path.join(directory, 'scripts'));
-    fs.mkdirSync(path.join(directory, 'node_modules', '.bin'), {
-      recursive: true,
-    });
-    fs.copyFileSync(
-      path.join(root, 'scripts', 'test.sh'),
-      path.join(directory, 'scripts', 'test.sh')
-    );
-    fs.writeFileSync(
-      path.join(directory, 'scripts', 'runner.sh'),
-      '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > arguments.txt\nprintf "TAP version 13\\n"\nexit "$PRODUCER_STATUS"\n',
-      { mode: 0o755 }
-    );
-    fs.writeFileSync(
-      path.join(directory, 'node_modules', '.bin', 'tap-spec'),
-      '#!/usr/bin/env bash\nwhile IFS= read -r line; do :; done\nexit "$REPORTER_STATUS"\n',
-      { mode: 0o755 }
-    );
+    prepareUnitFixture(directory);
 
     for (const [producer, reporter] of [
       [0, 0],
@@ -61,24 +95,10 @@ test('unit runner preserves failures and argument boundaries', (t) => {
       [0, 9],
       [7, 9],
     ]) {
-      const result = spawnSync(
-        process.env.BOOKS_TEST_SHELL || 'zsh',
-        [
-          'scripts/test.sh',
-          'folder with spaces/example.spec.ts',
-          'second.spec.ts',
-        ],
-        {
-          cwd: directory,
-          env: {
-            ...env,
-            PRODUCER_STATUS: String(producer),
-            REPORTER_STATUS: String(reporter),
-          },
-          encoding: 'utf8',
-          timeout: 10_000,
-        }
-      );
+      const result = runUnitFixture(directory, producer, reporter, [
+        'folder with spaces/example.spec.ts',
+        'second.spec.ts',
+      ]);
       t.error(result.error, 'runner started');
       t.equal(
         result.status,
@@ -98,30 +118,141 @@ test('unit runner preserves failures and argument boundaries', (t) => {
         'arguments remain separate'
       );
     }
-    const result = spawnSync(
-      process.env.BOOKS_TEST_SHELL || 'zsh',
-      ['scripts/test.sh'],
-      {
-        cwd: directory,
-        env: { ...env, PRODUCER_STATUS: '0', REPORTER_STATUS: '0' },
-        encoding: 'utf8',
-        timeout: 10_000,
-      }
-    );
-    t.equal(result.status, 0, 'default discovery succeeds');
-    t.equal(
-      fs
-        .readFileSync(path.join(directory, 'arguments.txt'), 'utf8')
-        .trim()
-        .split('\n')[1],
-      './**/tests/**/*.spec.ts',
-      'Tape receives its recursive glob'
-    );
+    assertDefaultDiscovery(t, directory);
   } finally {
     removeFixture(directory);
     t.end();
   }
 });
+
+function runUIFixture(directory, mode) {
+  const log = path.join(directory, `${mode}.json`);
+  const loader = new URL('./mock-loader.mjs', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['uitest/index.mjs'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 15_000,
+    env: {
+      ...env,
+      TEMP: directory,
+      TMP: directory,
+      TMPDIR: directory,
+      NODE_OPTIONS: `--import=${loader}`,
+      BOOKS_TEST_CASE: mode,
+      BOOKS_TEST_LOG: log,
+      NODE_ENV: 'development',
+      ELECTRON_RUN_AS_NODE: '1',
+    },
+  });
+  return { result, observation: JSON.parse(fs.readFileSync(log)) };
+}
+
+function assertProfileIsolation(t, directory, mode, observation) {
+  const childEnv = observation.options.env;
+  const profile = childEnv?.BOOKS_UI_TEST_DIR;
+  const owned =
+    typeof profile === 'string' &&
+    path.isAbsolute(profile) &&
+    path.dirname(profile) === directory &&
+    path.basename(profile).startsWith('books-ui-test-');
+  t.ok(owned, `${mode}: profile belongs to the parent fixture`);
+  if (!owned) return false;
+  t.equal(
+    childEnv.NODE_ENV,
+    'production',
+    `${mode}: development database path disabled`
+  );
+  t.equal(
+    childEnv.ELECTRON_RUN_AS_NODE,
+    undefined,
+    `${mode}: Electron node mode excluded`
+  );
+  t.equal(childEnv.NODE_OPTIONS, undefined, `${mode}: parent hooks excluded`);
+  t.deepEqual(
+    observation.options.args,
+    [
+      path.join(root, 'uitest', 'bootstrap.cjs'),
+      `--user-data-dir=${path.join(profile, 'userData')}`,
+    ],
+    `${mode}: isolated bootstrap used`
+  );
+  for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) {
+    t.equal(childEnv[name], profile, `${mode}: synthetic ${name}`);
+  }
+  for (const name of ['TEMP', 'TMP', 'TMPDIR']) {
+    t.equal(
+      childEnv[name],
+      path.join(profile, 'temp'),
+      `${mode}: isolated ${name}`
+    );
+  }
+  return true;
+}
+
+function assertLifecycle(t, mode, result, observation) {
+  const retained = [
+    'kill-error',
+    'kill-timeout',
+    'leader-exit',
+    'partial-kill',
+    'window-kill-error',
+    'launch-rm-error',
+  ].includes(mode);
+  t.equal(
+    fs.existsSync(observation.options.env.BOOKS_UI_TEST_DIR),
+    retained || mode === 'exit',
+    `${mode}: profile retained only when cleanup cannot complete`
+  );
+  if (!mode.startsWith('launch') && mode !== 'exit') {
+    t.equal(observation.closed, true, `${mode}: app close requested`);
+    if (!retained) {
+      t.equal(observation.terminated, true, `${mode}: child terminated`);
+      t.equal(
+        observation.profilePresentAtExit,
+        true,
+        `${mode}: termination precedes removal`
+      );
+    }
+  }
+  if (mode === 'pass') {
+    t.equal(
+      observation.loadState,
+      'load',
+      'already loaded windows are accepted'
+    );
+    t.match(
+      result.stdout,
+      /passing:\s+6/,
+      'formatted results drain before exit'
+    );
+  }
+}
+
+function assertCombinedFailures(t, mode, result) {
+  if (mode === 'window-kill-error') {
+    t.match(
+      result.stderr,
+      /Fabricated window failure/,
+      'primary window failure survives shutdown'
+    );
+    t.match(
+      result.stderr,
+      /Fabricated termination failure/,
+      'shutdown failure is reported'
+    );
+  } else if (mode === 'launch-rm-error') {
+    t.match(
+      result.stderr,
+      /Fabricated launch failure/,
+      'primary launch failure survives removal'
+    );
+    t.match(
+      result.stderr,
+      /Fabricated profile removal failure/,
+      'removal failure is reported'
+    );
+  }
+}
 
 test('UI command preserves failures and cleans its isolated profile', (t) => {
   const directory = fs.mkdtempSync(
@@ -129,7 +260,6 @@ test('UI command preserves failures and cleans its isolated profile', (t) => {
   );
   const command = JSON.parse(fs.readFileSync(path.join(root, 'package.json')))
     .scripts.uitest;
-  const loader = new URL('./mock-loader.mjs', import.meta.url).href;
   t.equal(
     command,
     'node uitest/index.mjs',
@@ -155,103 +285,42 @@ test('UI command preserves failures and cleans its isolated profile', (t) => {
       ['leader-exit', 1],
       ['delayed-close', 1],
       ['partial-kill', 1],
+      ['window-kill-error', 1],
+      ['launch-rm-error', 1],
     ]) {
-      const log = path.join(directory, `${mode}.json`);
-      const result = spawnSync(process.execPath, ['uitest/index.mjs'], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: {
-          ...env,
-          NODE_OPTIONS: `--import=${loader}`,
-          BOOKS_TEST_CASE: mode,
-          BOOKS_TEST_LOG: log,
-          NODE_ENV: 'development',
-          ELECTRON_RUN_AS_NODE: '1',
-        },
-      });
+      const { result, observation } = runUIFixture(directory, mode);
       t.error(result.error, `${mode}: command started`);
       t.equal(result.status, status, `${mode}: exit status`);
-      const observation = JSON.parse(fs.readFileSync(log));
-      const childEnv = observation.options.env;
-      const profile = childEnv?.BOOKS_UI_TEST_DIR;
-      t.equal(
-        childEnv?.NODE_ENV,
-        'production',
-        `${mode}: development database path disabled`
-      );
-      t.equal(
-        childEnv?.ELECTRON_RUN_AS_NODE,
-        undefined,
-        `${mode}: Electron node mode excluded`
-      );
-      t.equal(
-        childEnv?.NODE_OPTIONS,
-        undefined,
-        `${mode}: parent hooks excluded`
-      );
-      t.equal(
-        path.dirname(profile || ''),
-        temporaryRoot,
-        `${mode}: temporary profile`
-      );
-      t.deepEqual(
-        observation.options.args,
-        [
-          path.join(root, 'uitest', 'bootstrap.cjs'),
-          `--user-data-dir=${path.join(profile, 'userData')}`,
-        ],
-        `${mode}: isolated bootstrap used`
-      );
-      for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) {
-        t.equal(childEnv[name], profile, `${mode}: synthetic ${name}`);
-      }
-      for (const name of ['TEMP', 'TMP', 'TMPDIR']) {
-        t.equal(
-          childEnv[name],
-          path.join(profile, 'temp'),
-          `${mode}: isolated ${name}`
-        );
-      }
-      const retained = [
-        'kill-error',
-        'kill-timeout',
-        'leader-exit',
-        'partial-kill',
-      ].includes(mode);
-      if (profile && path.dirname(profile) === temporaryRoot) {
-        if (mode === 'exit') removeFixture(profile);
-        else
-          t.equal(
-            fs.existsSync(profile),
-            retained,
-            `${mode}: profile retained only when termination is unverified`
-          );
-        if (fs.existsSync(profile)) removeFixture(profile);
-      }
-      if (!['launch', 'exit'].includes(mode))
-        t.equal(observation.closed, true, `${mode}: app close requested`);
-      if (!['launch', 'exit'].includes(mode) && !retained) {
-        t.equal(observation.terminated, true, `${mode}: child terminated`);
-        t.equal(
-          observation.profilePresentAtExit,
-          true,
-          `${mode}: termination precedes removal`
-        );
-      }
-      if (mode === 'pass') {
-        t.equal(
-          observation.loadState,
-          'load',
-          'already loaded windows are accepted'
-        );
-        t.match(
-          result.stdout,
-          /passing:\s+6/,
-          'formatted results drain before exit'
-        );
+      if (assertProfileIsolation(t, directory, mode, observation)) {
+        assertLifecycle(t, mode, result, observation);
+        assertCombinedFailures(t, mode, result);
       }
     }
+  } finally {
+    // The loader uses synthetic children; the parent owns every retained profile.
+    removeFixture(directory);
+    t.end();
+  }
+});
+
+test('cleanup refusal preserves the original launch failure', (t) => {
+  const directory = fs.mkdtempSync(
+    path.join(temporaryRoot, 'books-runner-test-')
+  );
+  try {
+    const { result } = runUIFixture(directory, 'launch-unsafe-cleanup');
+    t.error(result.error, 'command started');
+    t.equal(result.status, 1, 'cleanup refusal fails the command');
+    t.match(
+      result.stderr,
+      /Refusing to remove a directory outside the test root/,
+      'unsafe cleanup is refused'
+    );
+    t.match(
+      result.stderr,
+      /Fabricated launch failure/,
+      'original launch failure survives cleanup'
+    );
   } finally {
     removeFixture(directory);
     t.end();
@@ -267,9 +336,16 @@ test('bootstrap isolates paths before importing application code', (t) => {
     'utf8'
   );
   try {
+    const expectedPaths = new Map(
+      ['userData', 'sessionData', 'documents', 'logs'].map((name) => [
+        name,
+        path.join(directory, name),
+      ])
+    );
     const paths = {};
     let applicationImports = 0;
     const childEnv = { BOOKS_UI_TEST_DIR: directory, NODE_ENV: 'development' };
+    // Execute the checked-in bootstrap with mocks, not untrusted source.
     vm.runInNewContext(source, {
       process: { env: childEnv },
       require(name) {
@@ -277,8 +353,12 @@ test('bootstrap isolates paths before importing application code', (t) => {
           return {
             app: {
               setPath(name, value) {
+                const expected = expectedPaths.get(name);
+                if (!expected || value !== expected) {
+                  throw new Error('Bootstrap path is outside the fixture');
+                }
                 t.ok(
-                  fs.statSync(value).isDirectory(),
+                  fs.lstatSync(expected).isDirectory(),
                   `${name} exists before setPath`
                 );
                 paths[name] = value;

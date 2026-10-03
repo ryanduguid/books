@@ -30,7 +30,8 @@ export function forceStop(pid, signal) {
     throw new Error('Unexpected kill target');
   observation.forced = true;
   save();
-  if (mode === 'kill-error') throw new Error('Fabricated termination failure');
+  if (['kill-error', 'window-kill-error'].includes(mode))
+    throw new Error('Fabricated termination failure');
   if (mode === 'partial-kill') {
     child.exitCode = 7;
     child.emit('exit');
@@ -85,12 +86,14 @@ export const _electron = {
     observation = { options, closed: false };
     save();
     if (mode === 'exit') process.exit(7);
-    if (mode === 'launch') throw new Error('Fabricated launch failure');
+    if (['launch', 'launch-unsafe-cleanup', 'launch-rm-error'].includes(mode))
+      throw new Error('Fabricated launch failure');
     process.kill = forceStop;
     if (
       [
         'hang',
         'kill-error',
+        'window-kill-error',
         'kill-timeout',
         'leader-exit',
         'partial-kill',
@@ -99,7 +102,8 @@ export const _electron = {
       keepAlive = setInterval(() => {}, 1000);
     return {
       async firstWindow() {
-        if (mode === 'window') throw new Error('Fabricated window failure');
+        if (['window', 'window-kill-error'].includes(mode))
+          throw new Error('Fabricated window failure');
         return window;
       },
       async close() {
@@ -120,7 +124,13 @@ export const _electron = {
           );
         }
         if (
-          ['close', 'kill-error', 'kill-timeout', 'partial-kill'].includes(mode)
+          [
+            'close',
+            'kill-error',
+            'window-kill-error',
+            'kill-timeout',
+            'partial-kill',
+          ].includes(mode)
         )
           throw new Error('Fabricated close failure');
         child.exitCode =
