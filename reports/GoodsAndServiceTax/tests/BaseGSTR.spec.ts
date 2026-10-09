@@ -2,7 +2,7 @@ import type { Fyo } from 'fyo';
 import type { Invoice } from 'models/baseModels/Invoice/Invoice';
 import Module from 'module';
 import { getMoneyMaker } from 'pesa';
-import tape from 'tape';
+import test from 'tape';
 import { parseCSV } from 'utils/csvParser';
 import { GSTRRow } from '../types';
 
@@ -57,7 +57,7 @@ try {
 }
 
 const restoredModules = { ...require.cache };
-tape('GST report imports restore the module cache', (t) => {
+test('GST report imports restore the module cache', (t) => {
   t.deepEqual(
     Object.keys(restoredModules).sort(),
     Object.keys(cachedModules).sort()
@@ -100,7 +100,7 @@ const categories = [
 
 for (const Report of [GSTR1, GSTR2]) {
   for (const { account, rate, changes } of categories) {
-    tape(`${Report.title}: ${account} updates only its category`, (t) => {
+    test(`${Report.title}: ${account} updates only its category`, (t) => {
       const report = new Report(fyo);
       const actual = {
         ...row(),
@@ -135,23 +135,22 @@ for (const Report of [GSTR1, GSTR2]) {
       { account: 'SGST', rate: 7 },
     ],
   ]) {
-    tape(
-      `${Report.title}: processes ${taxes.map((tax) => tax.account)}`,
-      (t) => {
-        const actual = row();
-        new Report(fyo).setTaxValuesOnGSTRRow(invoice(taxes), actual);
-        t.deepEqual(actual, {
-          ...row(),
-          rate: taxes.reduce((sum, tax) => sum + tax.rate, 0),
-          cgstAmt: taxes[0].rate === 9 ? 90 : 50,
-          sgstAmt: taxes[0].rate === 9 ? 90 : 70,
-        });
-        t.end();
-      }
-    );
+    test(`${Report.title}: processes ${taxes.map(
+      (tax) => tax.account
+    )}`, (t) => {
+      const actual = row();
+      new Report(fyo).setTaxValuesOnGSTRRow(invoice(taxes), actual);
+      t.deepEqual(actual, {
+        ...row(),
+        rate: taxes.reduce((sum, tax) => sum + tax.rate, 0),
+        cgstAmt: taxes[0].rate === 9 ? 90 : 50,
+        sgstAmt: taxes[0].rate === 9 ? 90 : 70,
+      });
+      t.end();
+    });
   }
 
-  tape(`${Report.title}: absent summaries leave the row unchanged`, (t) => {
+  test(`${Report.title}: absent summaries leave the row unchanged`, (t) => {
     for (const taxes of [undefined, []]) {
       const actual = row();
       new Report(fyo).setTaxValuesOnGSTRRow(invoice(taxes), actual);
@@ -160,7 +159,7 @@ for (const Report of [GSTR1, GSTR2]) {
     t.end();
   });
 
-  tape(`${Report.title}: preserves a negative matching amount`, (t) => {
+  test(`${Report.title}: preserves a negative matching amount`, (t) => {
     const actual = row();
     new Report(fyo).setTaxValuesOnGSTRRow(
       invoice([{ account: 'CGST', rate: -3 }]),
@@ -185,24 +184,21 @@ for (const Report of [GSTR1, GSTR2]) {
       csv: ['', '90', '90'],
     },
   ]) {
-    tape(
-      `${Report.title}: tax heads reach report and CSV separately`,
-      async (t) => {
-        const report = new Report(fyo);
-        const actual = row();
-        report.setTaxValuesOnGSTRRow(invoice(taxes), actual);
-        report.columns = (await report.getColumns()).filter((column) =>
-          ['igstAmt', 'cgstAmt', 'sgstAmt'].includes(column.fieldname)
-        );
-        report.reportData = report.getReportDataFromGSTRRows([actual]);
+    test(`${Report.title}: tax heads reach report and CSV separately`, async (t) => {
+      const report = new Report(fyo);
+      const actual = row();
+      report.setTaxValuesOnGSTRRow(invoice(taxes), actual);
+      report.columns = (await report.getColumns()).filter((column) =>
+        ['igstAmt', 'cgstAmt', 'sgstAmt'].includes(column.fieldname)
+      );
+      report.reportData = report.getReportDataFromGSTRRows([actual]);
 
-        t.deepEqual(
-          report.reportData[0].cells.map((cell) => cell.rawValue),
-          amounts
-        );
-        t.deepEqual(parseCSV(getCsvData(report))[1], csv);
-        t.end();
-      }
-    );
+      t.deepEqual(
+        report.reportData[0].cells.map((cell) => cell.rawValue),
+        amounts
+      );
+      t.deepEqual(parseCSV(getCsvData(report))[1], csv);
+      t.end();
+    });
   }
 }
