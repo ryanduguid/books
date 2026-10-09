@@ -15,7 +15,18 @@ const fyo = {
 const uiPaths = ['src/utils/ui', 'src/utils/interactive', 'src/initFyo'].map(
   (path) => require.resolve(path)
 );
-const cachedUI = uiPaths.map((path) => require.cache[path]);
+const reportPaths = [
+  '../GSTR1',
+  '../GSTR2',
+  '../BaseGSTR',
+  '../gstExporter',
+  'reports/commonExporter',
+  'src/utils',
+].map((path) => require.resolve(path));
+const cachedModules = { ...require.cache };
+for (const path of reportPaths) {
+  delete require.cache[path];
+}
 function unexpectedUI() {
   throw new Error('GST report tests must not open browser dialogs');
 }
@@ -37,14 +48,25 @@ try {
   ({ GSTR2 } = require('../GSTR2'));
   ({ getCsvData } = require('reports/commonExporter'));
 } finally {
-  uiPaths.forEach((path, index) => {
-    if (cachedUI[index]) {
-      require.cache[path] = cachedUI[index];
-    } else {
+  for (const path of Object.keys(require.cache)) {
+    if (!(path in cachedModules)) {
       delete require.cache[path];
     }
-  });
+  }
+  Object.assign(require.cache, cachedModules);
 }
+
+const restoredModules = { ...require.cache };
+tape('GST report imports restore the module cache', (t) => {
+  t.deepEqual(
+    Object.keys(restoredModules).sort(),
+    Object.keys(cachedModules).sort()
+  );
+  for (const path of [...reportPaths, ...uiPaths]) {
+    t.equal(restoredModules[path], cachedModules[path], path);
+  }
+  t.end();
+});
 
 const money = getMoneyMaker({ currency: 'INR' });
 
