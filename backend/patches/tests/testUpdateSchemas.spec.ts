@@ -132,8 +132,8 @@ test('schema migration owns its temporary destination', async (t) => {
         );
         const connection = await manager.db!.knex!.raw('PRAGMA database_list');
         t.equal(
-          connection[0].file,
-          sourcePath,
+          await fs.realpath(connection[0].file),
+          await fs.realpath(sourcePath),
           'connection uses the source path'
         );
       } else if (mode === 'reconnect failure') {
