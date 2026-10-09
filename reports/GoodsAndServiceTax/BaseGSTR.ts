@@ -201,15 +201,20 @@ export abstract class BaseGSTR extends Report {
         case 'IGST': {
           gstrRow.igstAmt = taxAmt;
           gstrRow.inState = false;
+          break;
         }
         case 'CGST':
           gstrRow.cgstAmt = taxAmt;
+          break;
         case 'SGST':
           gstrRow.sgstAmt = taxAmt;
+          break;
         case 'Nil Rated':
           gstrRow.nilRated = true;
+          break;
         case 'Exempt':
           gstrRow.exempt = true;
+          break;
         case 'Non GST':
           gstrRow.nonGST = true;
       }
