@@ -15,7 +15,7 @@ import databaseManager from '../backend/database/manager';
 import { emitMainProcessError } from '../backend/helpers';
 import { Main } from '../main';
 import { DatabaseMethod } from '../utils/db/types';
-import { IPC_ACTIONS } from '../utils/messages';
+import { DB_CREATE_CANCELLED_CODE, IPC_ACTIONS } from '../utils/messages';
 import { getUrlAndTokenString, sendError } from './contactMothership';
 import { getLanguageMap } from './getLanguageMap';
 import { getTemplates } from './getPrintTemplates';
@@ -171,6 +171,13 @@ export default function registerIpcMainActionListeners(main: Main) {
   ipcMain.handle(IPC_ACTIONS.GET_LANGUAGE_MAP, async (_, code: string) => {
     const obj = { languageMap: {}, success: true, message: '' };
     try {
+      const match =
+        typeof code === 'string'
+          ? /^[a-z]{2}(?:-(?:[A-Z]{2}|[A-Z][a-z]{3}))?$/.exec(code)
+          : null;
+      if (!match || match[0] !== code) {
+        throw new Error('Invalid language code.');
+      }
       obj.languageMap = await getLanguageMap(code);
     } catch (err) {
       obj.success = false;
@@ -218,7 +225,13 @@ export default function registerIpcMainActionListeners(main: Main) {
   });
 
   ipcMain.handle(IPC_ACTIONS.DELETE_FILE, async (_, filePath: string) => {
-    return getErrorHandledReponse(async () => await fs.unlink(filePath));
+    return getErrorHandledReponse(async () => {
+      const targetPath = resolveFilePath(filePath);
+      if (!(await confirmFileOperation(main, targetPath, false))) {
+        return;
+      }
+      return await fs.unlink(targetPath);
+    });
   });
 
   ipcMain.handle(IPC_ACTIONS.GET_DB_LIST, async () => {
@@ -266,7 +279,17 @@ export default function registerIpcMainActionListeners(main: Main) {
     IPC_ACTIONS.DB_CREATE,
     async (_, dbPath: string, countryCode: string) => {
       return await getErrorHandledReponse(async () => {
-        return await databaseManager.createNewDatabase(dbPath, countryCode);
+        const targetPath =
+          dbPath === ':memory:' ? dbPath : resolveFilePath(dbPath);
+        if (
+          targetPath !== ':memory:' &&
+          !(await confirmFileOperation(main, targetPath, true))
+        ) {
+          throw Object.assign(new Error('Database creation cancelled.'), {
+            code: DB_CREATE_CANCELLED_CODE,
+          });
+        }
+        return await databaseManager.createNewDatabase(targetPath, countryCode);
       });
     }
   );
@@ -303,4 +326,44 @@ export default function registerIpcMainActionListeners(main: Main) {
       return databaseManager.getSchemaMap();
     });
   });
+}
+
+function resolveFilePath(filePath: unknown): string {
+  if (
+    typeof filePath !== 'string' ||
+    filePath.length === 0 ||
+    filePath.includes('\0')
+  ) {
+    throw new TypeError('Invalid filesystem path.');
+  }
+  return path.resolve(filePath);
+}
+
+async function confirmFileOperation(
+  main: Main,
+  targetPath: string,
+  createDatabase: boolean
+): Promise<boolean> {
+  const window = main.mainWindow;
+  if (!window || window.isDestroyed()) {
+    throw new Error('No active window for filesystem confirmation.');
+  }
+
+  const displayPath = JSON.stringify(targetPath).replace(
+    /[\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
+  const { response } = await dialog.showMessageBox(window, {
+    type: 'warning',
+    title: createDatabase ? 'Create or replace database' : 'Delete file',
+    message: createDatabase
+      ? 'Create a database at this location? Any filesystem entry at this exact path will be replaced.'
+      : 'Permanently delete the filesystem entry at this location?',
+    detail: `Filesystem path: ${displayPath}`,
+    buttons: ['Cancel', createDatabase ? 'Create' : 'Delete'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  return response === 1 && main.mainWindow === window && !window.isDestroyed();
 }

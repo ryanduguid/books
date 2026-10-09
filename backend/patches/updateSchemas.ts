@@ -49,33 +49,44 @@ async function execute(dm: DatabaseManager) {
    * data into.
    */
   const countryCode = await getCountryCode(sourceKnex);
-  const destDm = await getDestinationDM(dm.db!.dbPath, countryCode);
+  const temporaryDirectory = await fs.mkdtemp(
+    path.join(path.dirname(dm.db!.dbPath), '__update_schemas-')
+  );
+  const destDm = new DatabaseManager();
 
   /**
    * Copy data from all the relevant tables
    * the other tables will be empty cause unused.
    */
   try {
+    await destDm._connect(
+      path.join(temporaryDirectory, 'database.db'),
+      'create',
+      countryCode
+    );
+    await destDm.db!.migrate();
+    await destDm.db!.truncate();
     await copyData(sourceKnex, destDm);
-  } catch (err) {
-    const destPath = destDm.db!.dbPath;
-    await destDm.db!.close();
-    await fs.unlink(destPath);
-    throw err;
+
+    /**
+     * Version will update when migration completes, this
+     * is set to prevent this patch from running again.
+     */
+    await destDm.db!.update(ModelNameEnum.SystemSettings, {
+      version: '0.5.0-beta.0',
+    });
+
+    /**
+     * Replace the database with the new one.
+     */
+    await replaceDatabaseCore(dm, destDm);
+  } finally {
+    try {
+      await destDm.db?.close();
+    } finally {
+      await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    }
   }
-
-  /**
-   * Version will update when migration completes, this
-   * is set to prevent this patch from running again.
-   */
-  await destDm.db!.update(ModelNameEnum.SystemSettings, {
-    version: '0.5.0-beta.0',
-  });
-
-  /**
-   * Replace the database with the new one.
-   */
-  await replaceDatabaseCore(dm, destDm);
 }
 
 async function replaceDatabaseCore(
@@ -87,9 +98,8 @@ async function replaceDatabaseCore(
 
   await dm.db!.close();
   await destDm.db!.close();
-  await fs.unlink(oldDbPath);
   await fs.rename(newDbPath, oldDbPath);
-  await dm._connect(oldDbPath);
+  await dm._connect(oldDbPath, 'existing');
 }
 
 async function copyData(sourceKnex: Knex, destDm: DatabaseManager) {
@@ -338,21 +348,6 @@ async function copyValues(
   }
 
   await destKnex.batchInsert(destTableName, values, 100);
-}
-
-async function getDestinationDM(sourceDbPath: string, countryCode: string) {
-  /**
-   * This is where all the stuff from the old db will be copied.
-   * That won't be altered cause schema update will cause data loss.
-   */
-
-  const dir = path.parse(sourceDbPath).dir;
-  const dbPath = path.join(dir, '__update_schemas_temp.db');
-  const dm = new DatabaseManager();
-  await dm._connect(dbPath, countryCode);
-  await dm.db!.migrate();
-  await dm.db!.truncate();
-  return dm;
 }
 
 async function getCountryCode(knex: Knex) {

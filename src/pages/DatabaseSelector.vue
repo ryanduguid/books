@@ -308,8 +308,8 @@
 </template>
 <script lang="ts">
 import { setupDummyInstance } from 'dummy';
-import { t } from 'fyo';
 import { Verb } from 'fyo/telemetry/types';
+import { DatabaseError } from 'fyo/utils/errors';
 import { DateTime } from 'luxon';
 import Button from 'src/components/Button.vue';
 import LanguageSelector from 'src/components/Controls/LanguageSelector.vue';
@@ -317,10 +317,10 @@ import FeatherIcon from 'src/components/FeatherIcon.vue';
 import Loading from 'src/components/Loading.vue';
 import Modal from 'src/components/Modal.vue';
 import { fyo } from 'src/initFyo';
-import { showDialog } from 'src/utils/interactive';
 import { updateConfigFiles } from 'src/utils/misc';
 import { deleteDb, getSavePath, getSelectedFilePath } from 'src/utils/ui';
 import type { ConfigFilesWithModified } from 'utils/types';
+import { DB_CREATE_CANCELLED_CODE } from 'utils/messages';
 import { defineComponent } from 'vue';
 
 export default defineComponent({
@@ -373,30 +373,8 @@ export default defineComponent({
     },
     async deleteDb(i: number) {
       const file = this.files[i];
-      const setFiles = this.setFiles.bind(this);
-
-      await showDialog({
-        title: t`Delete ${file.companyName}?`,
-        detail: t`Database file: ${file.dbPath}`,
-        type: 'warning',
-        buttons: [
-          {
-            label: this.t`Yes`,
-            async action() {
-              await deleteDb(file.dbPath);
-              await setFiles();
-            },
-            isPrimary: true,
-          },
-          {
-            label: this.t`No`,
-            action() {
-              return null;
-            },
-            isEscape: true,
-          },
-        ],
-      });
+      await deleteDb(file.dbPath);
+      await this.setFiles();
     },
     async createDemo() {
       if (!fyo.store.isDevelopment) {
@@ -412,22 +390,33 @@ export default defineComponent({
       }
 
       this.creatingDemo = true;
-      await setupDummyInstance(
-        filePath,
-        fyo,
-        1,
-        this.baseCount,
-        (message, percent) => {
-          this.creationMessage = message;
-          this.creationPercent = percent;
-        }
-      );
+      try {
+        await setupDummyInstance(
+          filePath,
+          fyo,
+          1,
+          this.baseCount,
+          (message, percent) => {
+            this.creationMessage = message;
+            this.creationPercent = percent;
+          }
+        );
 
-      updateConfigFiles(fyo);
-      await fyo.purgeCache();
-      await this.setFiles();
-      this.fyo.telemetry.log(Verb.Created, 'dummy-instance');
-      this.creatingDemo = false;
+        updateConfigFiles(fyo);
+        await fyo.purgeCache();
+        await this.setFiles();
+        this.fyo.telemetry.log(Verb.Created, 'dummy-instance');
+      } catch (error) {
+        if (
+          error instanceof DatabaseError &&
+          error.code === DB_CREATE_CANCELLED_CODE
+        ) {
+          return;
+        }
+        throw error;
+      } finally {
+        this.creatingDemo = false;
+      }
       this.$emit('file-selected', filePath);
     },
     async setFiles() {

@@ -1,3 +1,5 @@
+export const DB_CREATE_CANCELLED_CODE = 'ERR_DB_CREATE_CANCELLED';
+
 // ipcRenderer.send(...)
 export enum IPC_MESSAGES {
   OPEN_MENU = 'open-menu',

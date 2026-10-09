@@ -9,7 +9,7 @@ import { getSchemas } from '../../schemas';
 import { databaseMethodSet, unlinkIfExists } from '../helpers';
 import patches from '../patches';
 import { BespokeQueries } from './bespoke';
-import DatabaseCore from './core';
+import DatabaseCore, { DatabaseOpenMode } from './core';
 import { runPatches } from './runPatch';
 import { BespokeFunction, Patch, RawCustomField } from './types';
 
@@ -30,19 +30,27 @@ export class DatabaseManager extends DatabaseDemuxBase {
   }
 
   async createNewDatabase(dbPath: string, countryCode: string) {
-    await unlinkIfExists(dbPath);
-    return await this.connectToDatabase(dbPath, countryCode);
-  }
-
-  async connectToDatabase(dbPath: string, countryCode?: string) {
-    countryCode = await this._connect(dbPath, countryCode);
+    if (dbPath !== ':memory:') {
+      await unlinkIfExists(dbPath);
+    }
+    countryCode = await this._connect(dbPath, 'create', countryCode);
     await this.#migrate();
     return countryCode;
   }
 
-  async _connect(dbPath: string, countryCode?: string) {
-    countryCode ??= await DatabaseCore.getCountryCode(dbPath);
-    this.db = new DatabaseCore(dbPath);
+  async connectToDatabase(dbPath: string, countryCode?: string) {
+    countryCode = await this._connect(dbPath, 'existing', countryCode);
+    await this.#migrate();
+    return countryCode;
+  }
+
+  async _connect(
+    dbPath: string,
+    openMode: DatabaseOpenMode,
+    countryCode?: string
+  ) {
+    countryCode ??= await DatabaseCore.getCountryCode(dbPath, openMode);
+    this.db = new DatabaseCore(dbPath, openMode);
     await this.db.connect();
     await this.setRawCustomFields();
     const schemaMap = getSchemas(countryCode, this.rawCustomFields);

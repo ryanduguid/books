@@ -2,6 +2,9 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 
 const mode = process.env.BOOKS_TEST_CASE;
+const dialog = {
+  showMessageBox: async () => ({ response: 0, checkboxChecked: false }),
+};
 let disabled = true;
 let observation;
 let keepAlive;
@@ -59,13 +62,26 @@ const window = {
     observation.loadState = state;
     save();
   },
-  getByTestId() {
+  getByTestId(id) {
     return {
       async waitFor() {},
       async isVisible() {
         return true;
       },
-      async click() {},
+      async click() {
+        if (id === 'submit-button') {
+          await dialog.showMessageBox(
+            { isDestroyed: () => false },
+            {
+              title: 'Create or replace database',
+              detail: 'Filesystem path: "test.db"',
+              buttons: ['Cancel', 'Create'],
+              defaultId: 0,
+              cancelId: 0,
+            }
+          );
+        }
+      },
       async isDisabled() {
         const value = disabled;
         disabled = false;
@@ -101,6 +117,13 @@ export const _electron = {
     )
       keepAlive = setInterval(() => {}, 1000);
     return {
+      async evaluateHandle(callback) {
+        const state = await callback({ dialog });
+        return {
+          evaluate: async (callback) => callback(state),
+          async dispose() {},
+        };
+      },
       async firstWindow() {
         if (['window', 'window-kill-error'].includes(mode))
           throw new Error('Fabricated window failure');
