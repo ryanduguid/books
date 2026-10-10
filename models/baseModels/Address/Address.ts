@@ -40,13 +40,13 @@ export class Address extends Doc {
       const country = doc?.country as string | undefined;
       switch (country) {
         case 'India':
-          return Object.values(codeStateMap).sort();
+          return Object.values(codeStateMap).sort((a, b) => a.localeCompare(b));
         default:
           return [] as string[];
       }
     },
     country() {
-      return Object.keys(getCountryInfo()).sort();
+      return Object.keys(getCountryInfo()).sort((a, b) => a.localeCompare(b));
     },
   };
 
