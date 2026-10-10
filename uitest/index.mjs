@@ -169,11 +169,11 @@ async function runSmokeTests(electronApp) {
     .on('error', fail)
     .pipe(process.stdout, { end: false })
     .on('error', fail);
-  registerSmokeTests(test, window);
+  registerSmokeTests(test, window, electronApp);
   await finished;
 }
 
-function registerSmokeTests(test, window) {
+function registerSmokeTests(test, window, electronApp) {
   test('load app', async (t) => {
     t.equal(await window.title(), 'Frappe Books', 'title matches');
 
@@ -213,12 +213,46 @@ function registerSmokeTests(test, window) {
   });
 
   test('create new instance', async (t) => {
-    await window.getByTestId('submit-button').click();
-    t.equal(
-      await window.getByTestId('company-name').innerText(),
-      'Test Company',
-      'new instance created, company name found in sidebar'
-    );
+    const confirmation = await electronApp.evaluateHandle(({ dialog }) => {
+      const original = dialog.showMessageBox;
+      const state = {
+        options: undefined,
+        parented: false,
+        restore: () => {
+          dialog.showMessageBox = original;
+        },
+      };
+      dialog.showMessageBox = async (parent, options) => {
+        if (options.title !== 'Create or replace database') {
+          return original.call(dialog, parent, options);
+        }
+        state.options = options;
+        state.parented = !!parent && !parent.isDestroyed();
+        state.restore();
+        return { response: 1, checkboxChecked: false };
+      };
+      return state;
+    });
+    try {
+      await window.getByTestId('submit-button').click();
+      t.equal(
+        await window.getByTestId('company-name').innerText(),
+        'Test Company',
+        'new instance created, company name found in sidebar'
+      );
+      const record = await confirmation.evaluate((state) => ({
+        options: state.options,
+        parented: state.parented,
+      }));
+      t.ok(record.parented, 'creation confirmation belongs to the main window');
+      t.deepEqual(record.options.buttons, ['Cancel', 'Create']);
+      t.equal(record.options.defaultId, 0, 'creation defaults to cancellation');
+      t.equal(record.options.cancelId, 0, 'Escape cancels creation');
+      t.ok(record.options.detail.startsWith('Filesystem path: '));
+    } finally {
+      await confirmation.evaluate((state) => state.restore());
+      await confirmation.dispose();
+    }
   });
 }
 

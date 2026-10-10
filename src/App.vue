@@ -46,6 +46,7 @@
 </template>
 <script lang="ts">
 import { RTL_LANGUAGES } from 'fyo/utils/consts';
+import { DatabaseError } from 'fyo/utils/errors';
 import { ModelNameEnum } from 'models/types';
 import { systemLanguageRef } from 'src/utils/refs';
 import { defineComponent, provide, ref, Ref } from 'vue';
@@ -75,7 +76,8 @@ import {
   updateERPNSyncSettings,
 } from './utils/erpnextSync';
 import { ERPNextSyncSettings } from 'models/baseModels/ERPNextSyncSettings/ERPNextSyncSettings';
-import { ErrorLogEnum } from 'fyo/telemetry/types';
+import { ErrorLogEnum, Verb } from 'fyo/telemetry/types';
+import { DB_CREATE_CANCELLED_CODE } from 'utils/messages';
 
 enum Screen {
   Desk = 'Desk',
@@ -204,7 +206,19 @@ export default defineComponent({
     async setupComplete(setupWizardOptions: SetupWizardOptions): Promise<void> {
       const companyName = setupWizardOptions.companyName;
       const filePath = await ipc.getDbDefaultPath(companyName);
-      await setupInstance(filePath, setupWizardOptions, fyo);
+      try {
+        await setupInstance(filePath, setupWizardOptions, fyo);
+      } catch (error) {
+        if (
+          error instanceof DatabaseError &&
+          error.code === DB_CREATE_CANCELLED_CODE
+        ) {
+          await this.showDbSelector();
+          return;
+        }
+        throw error;
+      }
+      fyo.telemetry.log(Verb.Completed, ModelNameEnum.SetupWizard);
       fyo.config.set('lastSelectedFilePath', filePath);
       await this.setDesk(filePath);
     },

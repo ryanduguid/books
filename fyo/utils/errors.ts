@@ -56,6 +56,8 @@ export class MandatoryError extends ValidationError {
 }
 
 export class DatabaseError extends BaseError {
+  code?: string;
+
   constructor(message: string, shouldStore = true) {
     super(500, message, shouldStore);
     this.name = 'DatabaseError';
