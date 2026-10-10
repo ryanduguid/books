@@ -136,7 +136,7 @@ export async function getPrintTemplatePropValues(
   return values;
 }
 async function getPaymentDetails(doc: Doc, paymentId: string[]) {
-  const paymentIds = paymentId.sort();
+  const paymentIds = paymentId.sort((a, b) => a.localeCompare(b));
   const paymentDetails = [];
   let outstandingAmount = doc.grandTotal as Money;
 

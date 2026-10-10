@@ -238,7 +238,7 @@ export function getGroupedActionsForDoc(doc?: Doc): ActionGroup[] {
 
   const grouped = Object.keys(actionsMap)
     .filter(Boolean)
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .map((k) => actionsMap[k]);
 
   return [grouped, actionsMap['']].flat().filter(Boolean);
