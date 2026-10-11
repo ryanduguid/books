@@ -10,8 +10,9 @@ import { getDefaultMetaFieldValueMap } from '../../helpers';
 import updateSchemas from '../updateSchemas';
 
 test('first-run schema promotion reports the original pre-migration recovery', async (t) => {
+  const temporaryRoot = await fs.realpath(tmpdir());
   const directory = await fs.mkdtemp(
-    path.join(tmpdir(), 'books-first-recovery-')
+    path.join(temporaryRoot, 'books-first-recovery-')
   );
   const sourcePath = path.join(directory, 'source.books.db');
   const manager = new DatabaseManager();
@@ -83,8 +84,10 @@ test('first-run schema promotion reports the original pre-migration recovery', a
   } finally {
     manager._connect = connect;
     await manager.db?.close();
+    const resolved = await fs.realpath(directory);
     if (
-      path.dirname(path.resolve(directory)) !== path.resolve(tmpdir()) ||
+      resolved !== path.resolve(directory) ||
+      path.dirname(resolved) !== temporaryRoot ||
       !path.basename(directory).startsWith('books-first-recovery-')
     ) {
       throw new Error('Unexpected fixture path.');
@@ -104,8 +107,9 @@ test('schema migration preflight rejects unsupported series without changing the
     'unknown',
     'SalesInvoice',
   ]) {
+    const temporaryRoot = await fs.realpath(tmpdir());
     const directory = await fs.mkdtemp(
-      path.join(tmpdir(), 'books-series-preflight-')
+      path.join(temporaryRoot, 'books-series-preflight-')
     );
     const manager = new DatabaseManager();
     const dbPath = path.join(directory, 'source.books.db');
@@ -249,8 +253,10 @@ test('schema migration preflight rejects unsupported series without changing the
       }
     } finally {
       await manager.db?.close();
+      const resolved = await fs.realpath(directory);
       if (
-        path.dirname(path.resolve(directory)) !== path.resolve(tmpdir()) ||
+        resolved !== path.resolve(directory) ||
+        path.dirname(resolved) !== temporaryRoot ||
         !path.basename(directory).startsWith('books-series-preflight-')
       )
         throw new Error('Unexpected fixture path.');
@@ -269,7 +275,10 @@ test('schema migration owns its temporary destination', async (t) => {
     'replace failure',
     'reconnect failure',
   ]) {
-    const directory = await fs.mkdtemp(path.join(tmpdir(), 'books-schema-'));
+    const temporaryRoot = await fs.realpath(tmpdir());
+    const directory = await fs.mkdtemp(
+      path.join(temporaryRoot, 'books-schema-')
+    );
     const manager = new DatabaseManager();
     const sourcePath = path.join(directory, 'source.books.db');
     const sentinelPath = path.join(directory, '__update_schemas_temp.db');
@@ -346,6 +355,7 @@ test('schema migration owns its temporary destination', async (t) => {
         code: mode === 'replace failure' ? 'EACCES' : 'BOOKS_TEST_RECONNECT',
       });
       let replacementCalls = 0;
+      const canonicalSourcePath = await fs.realpath(sourcePath);
       if (mode === 'copy corruption') {
         DatabaseCore.prototype.truncate = async function (...args) {
           await truncate.apply(this, args);
@@ -359,7 +369,7 @@ test('schema migration owns its temporary destination', async (t) => {
       }
       if (mode === 'replace failure') {
         fs.rename = async (from, to) => {
-          if (to === sourcePath) {
+          if (to === canonicalSourcePath) {
             replacementCalls++;
             throw injectedError;
           }
@@ -552,6 +562,14 @@ test('schema migration owns its temporary destination', async (t) => {
       manager._connect = connect;
       DatabaseCore.prototype.truncate = truncate;
       if (manager.db?.knex) await manager.db.close();
+      const resolved = await fs.realpath(directory);
+      if (
+        resolved !== path.resolve(directory) ||
+        path.dirname(resolved) !== temporaryRoot ||
+        !path.basename(directory).startsWith('books-schema-')
+      ) {
+        throw new Error('Unexpected fixture cleanup path.');
+      }
       await fs.rm(directory, { recursive: true, force: true });
     }
   }
@@ -560,8 +578,9 @@ test('schema migration owns its temporary destination', async (t) => {
 
 for (const mode of ['primary plus cleanup', 'cleanup only']) {
   test(`schema migration ${mode} preserves the primary result and attempts bounded cleanup`, async (t) => {
+    const temporaryRoot = await fs.realpath(tmpdir());
     const directory = await fs.mkdtemp(
-      path.join(tmpdir(), 'books-schema-cleanup-')
+      path.join(temporaryRoot, 'books-schema-cleanup-')
     );
     const manager = new DatabaseManager();
     const close = DatabaseCore.prototype.close;
@@ -653,6 +672,14 @@ for (const mode of ['primary plus cleanup', 'cleanup only']) {
       fs.rmdir = rmdir;
       for (const db of staged) await db.close();
       await manager.db?.close();
+      const resolved = await fs.realpath(directory);
+      if (
+        resolved !== path.resolve(directory) ||
+        path.dirname(resolved) !== temporaryRoot ||
+        !path.basename(directory).startsWith('books-schema-cleanup-')
+      ) {
+        throw new Error('Unexpected fixture cleanup path.');
+      }
       await fs.rm(directory, { recursive: true, force: true });
     }
     t.end();

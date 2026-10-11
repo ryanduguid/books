@@ -55,19 +55,51 @@ test('patch execution stops with the primary error even when failure recording c
   t.end();
 });
 
-for (const failed of [false, true]) {
+for (const { failed, parentAlias } of [
+  { failed: false, parentAlias: false },
+  { failed: true, parentAlias: false },
+  { failed: false, parentAlias: true },
+  { failed: true, parentAlias: true },
+]) {
   test(`a cross-version patch retry records its ${
     failed ? 'failure' : 'success'
-  }`, async (t) => {
+  }${parentAlias ? ' through an owned parent alias' : ''}`, async (t) => {
+    const temporaryRoot = await fs.realpath(tmpdir());
     const directory = await fs.mkdtemp(
-      path.join(tmpdir(), 'books-patch-retry-')
+      path.join(temporaryRoot, 'books-patch-retry-')
     );
-    const dbPath = path.join(directory, 'source.books.db');
+    let dbPath = path.join(directory, 'source.books.db');
+    let canonicalDbPath = dbPath;
     const manager = new DatabaseManager();
     const version = '0.5.0-beta.0';
     const primary = new Error('retry failed');
     try {
+      await fs.writeFile(path.join(directory, 'sentinel'), 'unrelated');
+      await fs.mkdir(path.join(directory, 'sentinel-directory'));
+      if (parentAlias) {
+        const parent = path.join(directory, 'real-parent');
+        const alias = path.join(directory, 'parent-alias');
+        await fs.mkdir(parent);
+        let aliasCreated = true;
+        try {
+          await fs.symlink(parent, alias, 'dir');
+        } catch (error) {
+          if (
+            process.platform !== 'win32' ||
+            !['EPERM', 'EACCES'].includes(
+              (error as NodeJS.ErrnoException).code ?? ''
+            )
+          ) {
+            throw error;
+          }
+          t.skip('parent symlink requires Windows privilege');
+          aliasCreated = false;
+        }
+        dbPath = path.join(aliasCreated ? alias : parent, 'source.books.db');
+        canonicalDbPath = path.join(parent, 'source.books.db');
+      }
       await manager._connect(dbPath, 'create', 'in');
+      t.equal(manager.db!.dbPath, canonicalDbPath);
       await manager.db!.migrate();
       await manager.db!.insert('PatchRun', {
         ...getDefaultMetaFieldValueMap(),
@@ -106,7 +138,10 @@ for (const failed of [false, true]) {
       t.equal(failure, failed ? primary : undefined);
       t.equal(executions, 1);
       await manager.db!.close();
-      const independent = new BetterSQLite3(dbPath, { readonly: true });
+      const independent = new BetterSQLite3(canonicalDbPath, {
+        readonly: true,
+        fileMustExist: true,
+      });
       try {
         t.deepEqual(
           independent
@@ -123,16 +158,34 @@ for (const failed of [false, true]) {
       try {
         await reopened.connectToDatabase(dbPath);
         t.notOk(failed, 'a successful retry permits reopening');
+        t.equal(reopened.db!.dbPath, canonicalDbPath);
+        t.deepEqual(
+          await reopened.db!.knex!('PatchRun')
+            .select('name', 'failed', 'version')
+            .where({ name: 'testPatch' }),
+          [{ name: 'testPatch', failed: 0, version }],
+          'reopening retains the successful retry and its new version'
+        );
       } catch (error) {
         t.ok(failed, 'a failed retry blocks reopening at its new version');
         t.ok((error as Error).message.includes('testPatch'));
       } finally {
         await reopened.db?.close();
       }
+      t.equal(
+        await fs.readFile(path.join(directory, 'sentinel'), 'utf8'),
+        'unrelated'
+      );
+      t.deepEqual(
+        await fs.readdir(path.join(directory, 'sentinel-directory')),
+        []
+      );
     } finally {
       await manager.db?.close();
+      const resolved = await fs.realpath(directory);
       if (
-        path.dirname(path.resolve(directory)) !== path.resolve(tmpdir()) ||
+        resolved !== path.resolve(directory) ||
+        path.dirname(resolved) !== temporaryRoot ||
         !path.basename(directory).startsWith('books-patch-retry-')
       ) {
         throw new Error('Unexpected fixture path.');
@@ -207,8 +260,9 @@ test('only pre-migration patches may defer an absent PatchRun table', async (t) 
 });
 
 test('persisted patch failure blocks two independent reopenings at the same version', async (t) => {
+  const temporaryRoot = await fs.realpath(tmpdir());
   const directory = await fs.mkdtemp(
-    path.join(tmpdir(), 'books-patch-failure-')
+    path.join(temporaryRoot, 'books-patch-failure-')
   );
   const dbPath = path.join(directory, 'source.books.db');
   const setup = new DatabaseManager();
@@ -300,8 +354,10 @@ test('persisted patch failure blocks two independent reopenings at the same vers
     }
   } finally {
     await setup.db?.close();
+    const resolved = await fs.realpath(directory);
     if (
-      path.dirname(path.resolve(directory)) !== path.resolve(tmpdir()) ||
+      resolved !== path.resolve(directory) ||
+      path.dirname(resolved) !== temporaryRoot ||
       !path.basename(directory).startsWith('books-patch-failure-')
     )
       throw new Error('Unexpected fixture path.');

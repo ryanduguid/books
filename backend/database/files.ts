@@ -211,7 +211,7 @@ export async function assertNoDatabaseSidecars(dbPath: string) {
 
 export async function finishDatabaseCleanup(
   primaryError: unknown,
-  actions: (() => Promise<unknown> | unknown)[]
+  actions: (() => unknown)[]
 ) {
   const errors: unknown[] = [];
   for (const action of actions) {

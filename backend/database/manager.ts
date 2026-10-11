@@ -1,4 +1,5 @@
 import BetterSQLite3 from 'better-sqlite3';
+import { realpathSync } from 'fs';
 import fs from 'fs-extra';
 import { DatabaseError } from 'fyo/utils/errors';
 import path from 'path';
@@ -33,7 +34,19 @@ export class DatabaseManager extends DatabaseDemuxBase {
   private isStaging = false;
 
   getRecoveryPath(dbPath: string) {
-    return this.recoveryPaths.get(path.resolve(dbPath));
+    const resolvedPath = path.resolve(dbPath);
+    const recoveryPath = this.recoveryPaths.get(resolvedPath);
+    if (recoveryPath !== undefined) return recoveryPath;
+    try {
+      return this.recoveryPaths.get(
+        path.join(
+          realpathSync(path.dirname(resolvedPath)),
+          path.basename(resolvedPath)
+        )
+      );
+    } catch {
+      return recoveryPath;
+    }
   }
 
   getProtectedDatabasePaths() {
@@ -190,6 +203,8 @@ export class DatabaseManager extends DatabaseDemuxBase {
     openMode: DatabaseOpenMode,
     countryCode?: string
   ) {
+    if (dbPath !== ':memory:')
+      dbPath = (await captureDatabaseTarget(dbPath)).path;
     countryCode ??= await DatabaseCore.getCountryCode(dbPath, openMode);
     this.db = new DatabaseCore(dbPath, openMode);
     try {

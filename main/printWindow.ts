@@ -11,6 +11,20 @@ function sameIdentity(left: Stats, right: Stats) {
   );
 }
 
+function tryAttachCleanupErrors(
+  primaryError: unknown,
+  cleanupErrors: unknown[]
+) {
+  try {
+    if (!(primaryError instanceof Error)) return;
+    const error = primaryError as Error & { cleanupErrors?: string[] };
+    error.cleanupErrors = [
+      ...(error.cleanupErrors ?? []),
+      ...cleanupErrors.map((failure) => String(failure)),
+    ];
+  } catch {}
+}
+
 export async function withPrintWindow<T>(
   html: string,
   app: App,
@@ -35,6 +49,7 @@ export async function withPrintWindow<T>(
   let htmlIdentity: Stats | undefined;
   let window: BrowserWindow | undefined;
   let primaryError: unknown;
+  let hasPrimaryFailure = false;
   let result: T | undefined;
   try {
     directoryIdentity = await fs.lstat(directory);
@@ -44,20 +59,19 @@ export async function withPrintWindow<T>(
       await file.writeFile(html, 'utf8');
     } catch (error) {
       primaryError = error;
-      throw error;
-    } finally {
-      try {
-        await file.close();
-      } catch (error) {
-        if (primaryError instanceof Error) {
-          const primary = primaryError as Error & { cleanupErrors?: string[] };
-          primary.cleanupErrors = [
-            ...(primary.cleanupErrors ?? []),
-            String(error),
-          ];
-        } else throw error;
+      hasPrimaryFailure = true;
+    }
+    try {
+      await file.close();
+    } catch (error) {
+      if (hasPrimaryFailure) {
+        tryAttachCleanupErrors(primaryError, [error]);
+      } else {
+        primaryError = error;
+        hasPrimaryFailure = true;
       }
     }
+    if (hasPrimaryFailure) throw primaryError;
     window = new BrowserWindow({
       width: Math.floor(width * 28.333333),
       height: Math.floor(height * 28.333333),
@@ -67,12 +81,13 @@ export async function withPrintWindow<T>(
     result = await render(window);
   } catch (error) {
     primaryError = error;
+    hasPrimaryFailure = true;
   }
-  const cleanupErrors: string[] = [];
+  const cleanupErrors: unknown[] = [];
   try {
     if (window && !window.isDestroyed()) window.destroy();
   } catch (error) {
-    cleanupErrors.push(String(error));
+    cleanupErrors.push(error);
   }
   try {
     if (!directoryIdentity)
@@ -101,16 +116,15 @@ export async function withPrintWindow<T>(
     }
     await fs.rmdir(directory);
   } catch (error) {
-    cleanupErrors.push(String(error));
+    cleanupErrors.push(error);
   }
   if (cleanupErrors.length) {
-    if (!primaryError)
+    if (!hasPrimaryFailure) {
       primaryError = new Error('Print resource cleanup failed.');
-    if (primaryError instanceof Error) {
-      const error = primaryError as Error & { cleanupErrors?: string[] };
-      error.cleanupErrors = [...(error.cleanupErrors ?? []), ...cleanupErrors];
+      hasPrimaryFailure = true;
     }
+    tryAttachCleanupErrors(primaryError, cleanupErrors);
   }
-  if (primaryError) throw primaryError;
+  if (hasPrimaryFailure) throw primaryError;
   return result as T;
 }

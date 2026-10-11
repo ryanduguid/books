@@ -220,10 +220,19 @@ function getHandlers(directory?: string) {
 }
 
 async function withFixture(run: (directory: string) => Promise<void>) {
-  const directory = await fs.mkdtemp(path.join(tmpdir(), 'books-ipc-'));
+  const temporaryRoot = await fs.realpath(tmpdir());
+  const directory = await fs.mkdtemp(path.join(temporaryRoot, 'books-ipc-'));
   try {
     await run(directory);
   } finally {
+    const resolved = await fs.realpath(directory);
+    if (
+      resolved !== path.resolve(directory) ||
+      path.dirname(resolved) !== temporaryRoot ||
+      !path.basename(directory).startsWith('books-ipc-')
+    ) {
+      throw new Error('Unexpected fixture cleanup path.');
+    }
     await fs.rm(directory, { recursive: true, force: true });
   }
 }
@@ -433,7 +442,7 @@ test('generic selectors grant no database authority; native database selection p
     t.equal(fixture.calls.selections[2].parent, fixture.window);
     const connected = await fixture.handlers['db-connect'](
       fixture.event,
-      target,
+      selected.filePaths[0],
       'au'
     );
     t.notOk(connected.error);
@@ -446,6 +455,80 @@ test('generic selectors grant no database authority; native database selection p
       'path substitution is rejected'
     );
     t.equal(await fs.readFile(substitute, 'utf8'), 'unrelated sentinel');
+  });
+  t.end();
+});
+
+test('parent-alias database selections grant only the returned canonical pathname', async (t) => {
+  await withFixture(async (directory) => {
+    const parent = path.join(directory, 'real-parent');
+    const alias = path.join(directory, 'parent-alias');
+    await fs.mkdir(parent);
+    try {
+      await fs.symlink(parent, alias, 'dir');
+    } catch (error) {
+      if (
+        process.platform !== 'win32' ||
+        !['EPERM', 'EACCES'].includes(
+          (error as NodeJS.ErrnoException).code ?? ''
+        )
+      ) {
+        throw error;
+      }
+      t.skip('parent symlink requires Windows privilege');
+      return;
+    }
+    await fs.writeFile(path.join(directory, 'sentinel'), 'unrelated');
+    for (const operation of ['create', 'connect', 'delete'] as const) {
+      const lexical = path.join(alias, operation + '.db');
+      const canonical = path.join(parent, operation + '.db');
+      if (operation !== 'create')
+        await fs.writeFile(canonical, 'synthetic database');
+      const fixture = getHandlers(directory);
+      const selection = await fixture.grant(operation, lexical);
+      const selectedPath =
+        operation === 'create' ? selection.filePath : selection.filePaths[0];
+      t.equal(
+        selectedPath,
+        canonical,
+        'selector returns the canonical grant key'
+      );
+      const refused = await fixture.invoke(operation, lexical);
+      t.ok(
+        refused.error?.message.includes('no authority'),
+        'original lexical alias fails exact lookup'
+      );
+      t.equal(
+        fixture.calls.dialogs.length,
+        0,
+        'ungranted alias gets no confirmation'
+      );
+      t.equal(
+        fixture.calls.create.length +
+          fixture.calls.connect.length +
+          fixture.calls.unlink.length,
+        0
+      );
+      fixture.approve();
+      t.notOk(
+        (await fixture.invoke(operation, selectedPath)).error,
+        'canonical grant succeeds'
+      );
+      if (operation === 'create') {
+        t.equal(fixture.calls.create[0][0], canonical);
+        t.equal(await fs.readFile(canonical, 'utf8'), 'synthetic database');
+      } else if (operation === 'connect') {
+        t.equal(fixture.calls.connect[0][0], canonical);
+        t.equal(await fs.readFile(canonical, 'utf8'), 'synthetic database');
+      } else {
+        t.deepEqual(fixture.calls.unlink, [canonical]);
+        t.notOk((await fs.readdir(parent)).includes('delete.db'));
+      }
+    }
+    t.equal(
+      await fs.readFile(path.join(directory, 'sentinel'), 'utf8'),
+      'unrelated'
+    );
   });
   t.end();
 });

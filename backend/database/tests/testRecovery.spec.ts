@@ -7,6 +7,7 @@ import { loadSource } from '../../../main/tests/helpers';
 import DatabaseCore from '../core';
 import {
   assertDatabaseTarget,
+  backupDatabase,
   captureDatabaseTarget,
   finishDatabaseCleanup,
   promoteDatabase,
@@ -17,7 +18,10 @@ import { DatabaseManager } from '../manager';
 async function withFixture(
   run: (directory: string, target: string) => Promise<void>
 ) {
-  const directory = await fs.mkdtemp(path.join(tmpdir(), 'books-recovery-'));
+  const temporaryRoot = await fs.realpath(tmpdir());
+  const directory = await fs.mkdtemp(
+    path.join(temporaryRoot, 'books-recovery-')
+  );
   try {
     const target = path.join(directory, 'external arbitrary name');
     await fs.writeFile(
@@ -27,6 +31,14 @@ async function withFixture(
     await fs.mkdir(path.join(directory, 'sentinel-directory'));
     await run(directory, target);
   } finally {
+    const resolved = await fs.realpath(directory);
+    if (
+      resolved !== path.resolve(directory) ||
+      path.dirname(resolved) !== temporaryRoot ||
+      !path.basename(directory).startsWith('books-recovery-')
+    ) {
+      throw new Error('Unexpected fixture cleanup path.');
+    }
     await fs.rm(directory, { recursive: true, force: true });
   }
 }
@@ -139,6 +151,164 @@ test('replacement retains a verified independent original through later renderer
   t.end();
 });
 
+test('replacement through an owned parent alias retains canonical recovery lookup', async (t) => {
+  await withFixture(async (directory) => {
+    const parent = path.join(directory, 'real-parent');
+    const alias = path.join(directory, 'parent-alias');
+    await fs.mkdir(parent);
+    try {
+      await fs.symlink(parent, alias, 'dir');
+    } catch (error) {
+      if (
+        process.platform !== 'win32' ||
+        !['EPERM', 'EACCES'].includes(
+          (error as NodeJS.ErrnoException).code ?? ''
+        )
+      ) {
+        throw error;
+      }
+      t.skip('parent symlink requires Windows privilege');
+      return;
+    }
+    const target = path.join(alias, 'original.db');
+    const canonical = path.join(parent, 'original.db');
+    createOriginal(canonical).close();
+    const manager = new DatabaseManager();
+    try {
+      try {
+        await backupDatabase(canonical, path.join(alias, '.backup-'));
+        t.fail('backup parents must remain canonical');
+      } catch (error) {
+        t.ok(
+          String(error).includes('backup parent must be a canonical directory')
+        );
+      }
+      t.equal(await manager.createNewDatabase(target, 'in'), 'in');
+      t.equal(manager.db!.dbPath, canonical);
+      const recovery = manager.getRecoveryPath(canonical)!;
+      t.ok(recovery, 'replacement retains an original recovery');
+      t.equal(
+        manager.getRecoveryPath(target),
+        recovery,
+        'stable parent alias finds the same recovery'
+      );
+      t.equal(readOriginal(recovery), 'synthetic original');
+      await manager.db!.close();
+      await fs.rename(canonical, canonical + '.retained');
+      t.equal(
+        manager.getRecoveryPath(target),
+        recovery,
+        'lookup does not need the database file'
+      );
+      await fs.writeFile(canonical, 'replacement sentinel');
+      t.equal(manager.getRecoveryPath(target), recovery);
+      await fs.unlink(alias);
+      t.equal(
+        manager.getRecoveryPath(target),
+        undefined,
+        'removed aliases have no persistent lookup key'
+      );
+      t.equal(
+        manager.getRecoveryPath(canonical),
+        recovery,
+        'lexical canonical lookup survives alias removal'
+      );
+      t.equal(
+        manager.getRecoveryPath(
+          path.join(directory, 'missing-parent', 'database.db')
+        ),
+        undefined
+      );
+      t.equal(
+        readOriginal(recovery),
+        'synthetic original',
+        'recovery remains independently readable'
+      );
+      t.equal(await fs.readFile(canonical, 'utf8'), 'replacement sentinel');
+      await assertSentinels(t, directory);
+    } finally {
+      await manager.db?.close();
+    }
+  });
+  t.end();
+});
+
+test('a replaced parent alias revokes the original selected target even for a canonical connect path', async (t) => {
+  await withFixture(async (directory) => {
+    const parent = path.join(directory, 'real-parent');
+    const substitute = path.join(directory, 'substitute-parent');
+    const alias = path.join(directory, 'parent-alias');
+    await fs.mkdir(parent);
+    await fs.mkdir(substitute);
+    try {
+      await fs.symlink(parent, alias, 'dir');
+    } catch (error) {
+      if (
+        process.platform !== 'win32' ||
+        !['EPERM', 'EACCES'].includes(
+          (error as NodeJS.ErrnoException).code ?? ''
+        )
+      ) {
+        throw error;
+      }
+      t.skip('parent symlink requires Windows privilege');
+      return;
+    }
+    const canonical = path.join(parent, 'original.db');
+    createOriginal(canonical).close();
+    const selected = await captureDatabaseTarget(
+      path.join(alias, 'original.db')
+    );
+    await fs.writeFile(
+      path.join(substitute, 'original.db'),
+      'substitute sentinel'
+    );
+    const manager = new DatabaseManager();
+    const connect = manager._connect;
+    let aliasChanged = false;
+    let guards = 0;
+    try {
+      manager._connect = async function (...args) {
+        const country = await connect.apply(this, args);
+        await fs.unlink(alias);
+        await fs.symlink(substitute, alias, 'dir');
+        aliasChanged = true;
+        return country;
+      };
+      try {
+        await manager.connectToDatabase(
+          canonical,
+          'in',
+          () => {
+            guards++;
+          },
+          selected
+        );
+        t.fail('changed selected parent must reject');
+      } catch (error) {
+        t.ok(String(error).includes('parent changed after selection'));
+      }
+      t.ok(aliasChanged, 'parent replacement injection was reached');
+      t.ok(guards > 0, 'operation guard is still used');
+      t.notOk(
+        manager.db?.knex,
+        'revalidation failure closes the opened handle'
+      );
+      t.equal(manager.db!.dbPath, canonical);
+      t.equal(readOriginal(canonical), 'synthetic original');
+      t.equal(
+        await fs.readFile(path.join(substitute, 'original.db'), 'utf8'),
+        'substitute sentinel'
+      );
+      await assertSentinels(t, directory);
+    } finally {
+      manager._connect = connect;
+      await manager.db?.close();
+    }
+  });
+  t.end();
+});
+
 for (const phase of ['initialisation', 'migration', 'promotion', 'reconnect']) {
   test(`database ${phase} failure preserves original or recovery and the primary error`, async (t) => {
     await withFixture(async (directory, target) => {
@@ -147,6 +317,8 @@ for (const phase of ['initialisation', 'migration', 'promotion', 'reconnect']) {
       const connect = DatabaseManager.prototype._connect;
       const migrate = DatabaseCore.prototype.migrate;
       const rename = fs.rename;
+      const canonicalTarget = (await captureDatabaseTarget(target)).path;
+      let promotionFailures = 0;
       const error = Object.assign(new Error(`${phase} fixture`), {
         code: 'RECOVERY_FIXTURE',
       });
@@ -166,7 +338,10 @@ for (const phase of ['initialisation', 'migration', 'promotion', 'reconnect']) {
           };
         } else if (phase === 'promotion') {
           fs.rename = async (from, to) => {
-            if (to === target) throw error;
+            if (to === canonicalTarget) {
+              promotionFailures++;
+              throw error;
+            }
             return rename(from, to);
           };
         } else {
@@ -182,6 +357,8 @@ for (const phase of ['initialisation', 'migration', 'promotion', 'reconnect']) {
           t.equal((failure as any).code, 'RECOVERY_FIXTURE');
         }
         const recovery = manager.getRecoveryPath(target);
+        if (phase === 'promotion')
+          t.equal(promotionFailures, 1, 'promotion injection was reached');
         if (phase === 'promotion' || phase === 'reconnect') {
           t.ok(recovery);
           t.equal(readOriginal(recovery!), 'synthetic original');
