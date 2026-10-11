@@ -64,15 +64,24 @@ export default function registerIpcMainActionListeners(main: Main) {
       }
     });
   }
-  ipcMain.handle(IPC_ACTIONS.CHECK_DB_ACCESS, async (_, filePath: string) => {
-    try {
-      await fs.access(filePath, constants.W_OK | constants.R_OK);
-    } catch (err) {
-      return false;
-    }
+  ipcMain.handle(
+    IPC_ACTIONS.CHECK_DB_ACCESS,
+    async (event, filePath: string) => {
+      const window = authority.windowFor(event);
+      const target = await authority.get(event, 'connect', filePath, false);
+      authority.assertWindow(event, window);
 
-    return true;
-  });
+      let accessible = true;
+      try {
+        await fs.access(target.path, constants.W_OK | constants.R_OK);
+      } catch {
+        accessible = false;
+      }
+
+      authority.assertWindow(event, window);
+      return accessible;
+    }
+  );
 
   ipcMain.handle(
     IPC_ACTIONS.GET_DB_DEFAULT_PATH,
