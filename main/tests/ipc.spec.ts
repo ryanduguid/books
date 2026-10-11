@@ -12,7 +12,7 @@ const databaseActions = {
   delete: 'delete-file',
 } as const;
 
-function getHandlers(directory?: string) {
+function getHandlers(directory?: string, databaseManager?: object) {
   const handlers: Record<string, (...args: any[]) => Promise<any>> = {};
   const calls = {
     unlink: [] as string[],
@@ -146,7 +146,7 @@ function getHandlers(directory?: string) {
     }),
     '../utils/config': { get: () => [] },
     '../backend/database/files': files,
-    '../backend/database/manager': {
+    '../backend/database/manager': databaseManager ?? {
       getProtectedDatabasePaths: () => [],
       createNewDatabase: async (...args: any[]) => {
         calls.create.push(args);
@@ -236,6 +236,42 @@ async function withFixture(run: (directory: string) => Promise<void>) {
     await fs.rm(directory, { recursive: true, force: true });
   }
 }
+
+test('recovery IPC reads only cached paths for the active main frame', async (t) => {
+  let filesystemLookups = 0;
+  const { DatabaseManager } = loadSource<any>('backend/database/manager.ts', {
+    path,
+    fs: {
+      realpathSync: () => {
+        filesystemLookups++;
+        throw new Error('Recovery IPC must not resolve filesystem paths.');
+      },
+    },
+    'utils/db/types': { DatabaseDemuxBase: class {} },
+    './files': { backupDatabase: async () => 'retained original fixture' },
+  });
+  const manager = new DatabaseManager();
+  const selectedPath = path.resolve('/synthetic/company.db');
+  await manager.retainRecovery(selectedPath);
+  const fixture = getHandlers(undefined, manager);
+  const lookup = fixture.handlers['get-db-recovery-path'];
+  t.equal(lookup(fixture.event, selectedPath), 'retained original fixture');
+  t.equal(lookup(fixture.event, '/unregistered/database.db'), undefined);
+  t.equal(
+    lookup(fixture.event, String.raw`\\fixture.invalid\share\database.db`),
+    undefined,
+    'UNC-shaped input is tested without contacting a share'
+  );
+  for (const invalid of ['', 'invalid\0path']) {
+    t.throws(() => lookup(fixture.event, invalid), /Invalid database path/);
+  }
+  t.throws(
+    () => lookup({ ...fixture.event, senderFrame: {} }, selectedPath),
+    /active main window sender/
+  );
+  t.equal(filesystemLookups, 0, 'no lookup reaches the filesystem');
+  t.end();
+});
 
 test('default database selection writes only after creation approval', async (t) => {
   await withFixture(async (directory) => {

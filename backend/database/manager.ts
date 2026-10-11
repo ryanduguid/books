@@ -33,6 +33,10 @@ export class DatabaseManager extends DatabaseDemuxBase {
   private migrationRecoveryCreated = false;
   private isStaging = false;
 
+  getCachedRecoveryPath(dbPath: string) {
+    return this.recoveryPaths.get(path.resolve(dbPath));
+  }
+
   getRecoveryPath(dbPath: string) {
     const resolvedPath = path.resolve(dbPath);
     const recoveryPath = this.recoveryPaths.get(resolvedPath);

@@ -201,7 +201,7 @@ export default function registerIpcMainActionListeners(main: Main) {
 
   ipcMain.handle(IPC_ACTIONS.GET_DB_RECOVERY_PATH, (event, dbPath: string) => {
     authority.windowFor(event);
-    return databaseManager.getRecoveryPath(resolveDatabasePath(dbPath));
+    return databaseManager.getCachedRecoveryPath(resolveDatabasePath(dbPath));
   });
 
   ipcMain.handle(

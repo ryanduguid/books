@@ -99,7 +99,10 @@ test('replacement retains a verified independent original through later renderer
         'src/utils/db.ts',
         {},
         {
-          ipc: { getDbRecoveryPath: async () => recovery },
+          ipc: {
+            getDbRecoveryPath: async (dbPath: string) =>
+              manager.getCachedRecoveryPath(dbPath),
+          },
         }
       );
       const setup = loadSource<any>('src/setup/setupInstance.ts', {
@@ -187,6 +190,16 @@ test('replacement through an owned parent alias retains canonical recovery looku
       t.equal(manager.db!.dbPath, canonical);
       const recovery = manager.getRecoveryPath(canonical)!;
       t.ok(recovery, 'replacement retains an original recovery');
+      t.equal(
+        manager.getCachedRecoveryPath(canonical),
+        recovery,
+        'native canonical selection retains the renderer recovery hint'
+      );
+      t.equal(
+        manager.getCachedRecoveryPath(target),
+        undefined,
+        'renderer lookup does not resolve the backend alias'
+      );
       t.equal(
         manager.getRecoveryPath(target),
         recovery,
