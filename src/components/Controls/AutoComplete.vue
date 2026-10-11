@@ -111,7 +111,6 @@ import { getOptionList } from 'fyo/utils';
 import { FieldTypeEnum } from 'schemas/types';
 import Dropdown from 'src/components/Dropdown.vue';
 import { fuzzyMatch } from 'src/utils';
-import { getFormRoute, routeTo } from 'src/utils/ui';
 import Popover from '../Popover.vue';
 import Base from './Base.vue';
 import QuickView from '../QuickView.vue';
@@ -218,6 +217,7 @@ export default {
         return;
       }
 
+      const { getFormRoute, routeTo } = await import('src/utils/ui');
       const route = getFormRoute(this.linkSchemaName, name);
       await routeTo(route);
     },

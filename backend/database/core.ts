@@ -26,6 +26,7 @@ import {
   SingleValue,
   UpdateSinglesConfig,
 } from './types';
+import { finishDatabaseCleanup } from './files';
 
 export type DatabaseOpenMode = 'create' | 'existing';
 
@@ -115,13 +116,21 @@ export default class DatabaseCore extends DatabaseBase {
     try {
       await this.knex.raw('PRAGMA foreign_keys=ON');
     } catch (error) {
-      await this.knex.destroy();
+      await finishDatabaseCleanup(error, [
+        async () => {
+          await this.knex!.destroy();
+          this.knex = undefined;
+        },
+      ]);
       throw error;
     }
   }
 
   async close() {
-    await this.knex!.destroy();
+    const knex = this.knex;
+    if (!knex) return;
+    await knex.destroy();
+    this.knex = undefined;
   }
 
   async migrate(config: MigrationConfig = {}) {

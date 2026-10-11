@@ -31,7 +31,7 @@ export default function getCommonExportActions(report: Report): Action[] {
 }
 
 async function exportReport(extention: ExportExtention, report: Report) {
-  const { filePath, canceled } = await getSavePath(
+  const { filePath, canceled, grantId } = await getSavePath(
     report.reportName,
     extention
   );
@@ -52,7 +52,7 @@ async function exportReport(extention: ExportExtention, report: Report) {
     return;
   }
 
-  await saveExportData(data, filePath);
+  await saveExportData(data, filePath, grantId);
   report.fyo.telemetry.log(Verb.Exported, report.reportName, { extention });
 }
 
@@ -195,9 +195,10 @@ function getValueFromCell(cell: ReportCell, displayPrecision: number) {
 export async function saveExportData(
   data: string,
   filePath: string,
+  grantId: string,
   message?: string
 ) {
-  await ipc.saveData(data, filePath);
+  await ipc.saveData(data, filePath, grantId);
   message ??= t`Export Successful`;
   showExportInFolder(message, filePath);
 }

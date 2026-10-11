@@ -51,7 +51,6 @@ import { ModelNameEnum } from 'models/types';
 import { systemLanguageRef } from 'src/utils/refs';
 import { defineComponent, provide, ref, Ref } from 'vue';
 import WindowsTitleBar from './components/WindowsTitleBar.vue';
-import { handleErrorWithDialog } from './errorHandling';
 import { fyo } from './initFyo';
 import DatabaseSelector from './pages/DatabaseSelector.vue';
 import Desk from './pages/Desk.vue';
@@ -59,7 +58,11 @@ import SetupWizard from './pages/SetupWizard/SetupWizard.vue';
 import setupInstance from './setup/setupInstance';
 import { SetupWizardOptions } from './setup/types';
 import './styles/index.css';
-import { connectToDatabase, dbErrorActionSymbols } from './utils/db';
+import {
+  connectToDatabase,
+  dbErrorActionSymbols,
+  showDatabaseError,
+} from './utils/db';
 import { initializeInstance } from './utils/initialization';
 import * as injectionKeys from './utils/injectionKeys';
 import { showDialog, showToast } from './utils/interactive';
@@ -183,31 +186,50 @@ export default defineComponent({
       this.activeScreen = Screen.SetupWizard;
     },
     async fileSelected(filePath: string): Promise<void> {
-      fyo.config.set('lastSelectedFilePath', filePath);
-      if (filePath !== ':memory:' && !(await ipc.checkDbAccess(filePath))) {
-        await showDialog({
-          title: this.t`Cannot open file`,
-          type: 'error',
-          detail: this
-            .t`Frappe Books does not have access to the selected file: ${filePath}`,
-        });
-
-        fyo.config.set('lastSelectedFilePath', null);
-        return;
-      }
-
       try {
+        if (filePath !== ':memory:') {
+          const selection = await ipc.getOpenDatabaseFilePath(
+            'connect',
+            filePath
+          );
+          if (selection.canceled || !selection.filePaths[0]) {
+            await this.showDbSelector();
+            return;
+          }
+          filePath = selection.filePaths[0];
+        }
+        fyo.config.set('lastSelectedFilePath', filePath);
+        if (filePath !== ':memory:' && !(await ipc.checkDbAccess(filePath))) {
+          await showDialog({
+            title: this.t`Cannot open file`,
+            type: 'error',
+            detail: this
+              .t`Frappe Books does not have access to the selected file: ${filePath}`,
+          });
+
+          fyo.config.set('lastSelectedFilePath', null);
+          return;
+        }
+
         await this.showSetupWizardOrDesk(filePath);
       } catch (error) {
-        await handleErrorWithDialog(error, undefined, true, true);
+        await showDatabaseError(error, filePath);
         await this.showDbSelector();
       }
     },
     async setupComplete(setupWizardOptions: SetupWizardOptions): Promise<void> {
       const companyName = setupWizardOptions.companyName;
-      const filePath = await ipc.getDbDefaultPath(companyName);
+      let filePath = '';
       try {
+        filePath = await ipc.getDbDefaultPath(companyName);
+        if (!filePath) {
+          await this.showDbSelector();
+          return;
+        }
         await setupInstance(filePath, setupWizardOptions, fyo);
+        fyo.telemetry.log(Verb.Completed, ModelNameEnum.SetupWizard);
+        fyo.config.set('lastSelectedFilePath', filePath);
+        await this.setDesk(filePath);
       } catch (error) {
         if (
           error instanceof DatabaseError &&
@@ -216,11 +238,10 @@ export default defineComponent({
           await this.showDbSelector();
           return;
         }
-        throw error;
+        await showDatabaseError(error, filePath);
+        await this.showDbSelector();
+        return;
       }
-      fyo.telemetry.log(Verb.Completed, ModelNameEnum.SetupWizard);
-      fyo.config.set('lastSelectedFilePath', filePath);
-      await this.setDesk(filePath);
     },
     async showSetupWizardOrDesk(filePath: string): Promise<void> {
       const { countryCode, error, actionSymbol } = await connectToDatabase(

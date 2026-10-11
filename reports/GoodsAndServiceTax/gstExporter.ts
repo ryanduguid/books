@@ -141,7 +141,7 @@ async function exportReport(extention: ExportExtention, report: BaseGSTR) {
     return;
   }
 
-  const { filePath, canceled } = await getSavePath(
+  const { filePath, canceled, grantId } = await getSavePath(
     report.reportName,
     extention
   );
@@ -162,7 +162,7 @@ async function exportReport(extention: ExportExtention, report: BaseGSTR) {
     return;
   }
 
-  await saveExportData(data, filePath);
+  await saveExportData(data, filePath, grantId);
   report.fyo.telemetry.log(Verb.Exported, report.reportName, { extention });
 }
 

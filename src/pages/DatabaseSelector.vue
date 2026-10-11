@@ -318,7 +318,12 @@ import Loading from 'src/components/Loading.vue';
 import Modal from 'src/components/Modal.vue';
 import { fyo } from 'src/initFyo';
 import { updateConfigFiles } from 'src/utils/misc';
-import { deleteDb, getSavePath, getSelectedFilePath } from 'src/utils/ui';
+import {
+  deleteDb,
+  getSaveDatabasePath,
+  getSelectedFilePath,
+} from 'src/utils/ui';
+import { showDatabaseError } from 'src/utils/db';
 import type { ConfigFilesWithModified } from 'utils/types';
 import { DB_CREATE_CANCELLED_CODE } from 'utils/messages';
 import { defineComponent } from 'vue';
@@ -384,13 +389,14 @@ export default defineComponent({
       }
     },
     async startDummyInstanceSetup() {
-      const { filePath, canceled } = await getSavePath('demo', 'db');
-      if (canceled || !filePath) {
-        return;
-      }
-
-      this.creatingDemo = true;
+      let filePath: string | undefined;
       try {
+        const selected = await getSaveDatabasePath('demo.db');
+        if (selected.canceled || !selected.filePath) {
+          return;
+        }
+        filePath = selected.filePath;
+        this.creatingDemo = true;
         await setupDummyInstance(
           filePath,
           fyo,
@@ -413,7 +419,8 @@ export default defineComponent({
         ) {
           return;
         }
-        throw error;
+        await showDatabaseError(error, filePath);
+        return;
       } finally {
         this.creatingDemo = false;
       }
@@ -437,8 +444,12 @@ export default defineComponent({
         return;
       }
 
-      const filePath = (await getSelectedFilePath())?.filePaths?.[0];
-      this.emitFileSelected(filePath);
+      try {
+        const filePath = (await getSelectedFilePath())?.filePaths?.[0];
+        this.emitFileSelected(filePath);
+      } catch (error) {
+        await showDatabaseError(error);
+      }
     },
     selectFile(file: ConfigFilesWithModified) {
       if (this.creatingDemo) {

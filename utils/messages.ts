@@ -20,6 +20,9 @@ export enum IPC_MESSAGES {
 export enum IPC_ACTIONS {
   GET_OPEN_FILEPATH = 'open-dialog',
   GET_SAVE_FILEPATH = 'save-dialog',
+  GET_OPEN_DATABASE_FILEPATH = 'open-database-dialog',
+  GET_SAVE_DATABASE_FILEPATH = 'save-database-dialog',
+  GET_DB_RECOVERY_PATH = 'get-db-recovery-path',
   GET_DIALOG_RESPONSE = 'show-message-box',
   GET_ENV = 'get-env',
   SAVE_HTML_AS_PDF = 'save-html-as-pdf',

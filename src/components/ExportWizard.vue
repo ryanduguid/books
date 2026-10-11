@@ -250,7 +250,7 @@ export default defineComponent({
     },
     async saveExportData(data: string) {
       const fileName = this.getFileName();
-      const { canceled, filePath } = await getSavePath(
+      const { canceled, filePath, grantId } = await getSavePath(
         fileName,
         this.exportFormat
       );
@@ -258,7 +258,7 @@ export default defineComponent({
         return;
       }
 
-      await ipc.saveData(data, filePath);
+      await ipc.saveData(data, filePath, grantId);
       this.fyo.telemetry.log(Verb.Exported, this.schemaName, {
         extension: this.exportFormat,
       });

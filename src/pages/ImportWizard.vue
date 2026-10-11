@@ -829,13 +829,16 @@ export default defineComponent({
     async saveTemplate(): Promise<void> {
       const template = this.importer.getCSVTemplate();
       const templateName = this.importType + ' ' + this.t`Template`;
-      const { canceled, filePath } = await getSavePath(templateName, 'csv');
+      const { canceled, filePath, grantId } = await getSavePath(
+        templateName,
+        'csv'
+      );
 
       if (canceled || !filePath) {
         return;
       }
 
-      await ipc.saveData(template, filePath);
+      await ipc.saveData(template, filePath, grantId);
     },
     async preImportValidations(): Promise<boolean> {
       const title = this.t`Cannot Import`;

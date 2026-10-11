@@ -1,7 +1,6 @@
 import {
   MessageBoxOptions,
   OpenDialogOptions,
-  SaveDialogOptions,
   app,
   dialog,
   ipcMain,
@@ -15,22 +14,56 @@ import databaseManager from '../backend/database/manager';
 import { emitMainProcessError } from '../backend/helpers';
 import { Main } from '../main';
 import { DatabaseMethod } from '../utils/db/types';
+import type { ExportFormat } from '../utils/ipc/types';
+import config from '../utils/config';
 import { DB_CREATE_CANCELLED_CODE, IPC_ACTIONS } from '../utils/messages';
 import { getUrlAndTokenString, sendError } from './contactMothership';
 import { getLanguageMap } from './getLanguageMap';
 import { getTemplates } from './getPrintTemplates';
 import { printHtmlDocument } from './printHtmlDocument';
 import {
+  displayFilePath,
   getConfigFilesWithModified,
   getErrorHandledReponse,
   isNetworkError,
   setAndGetCleanedConfigFiles,
 } from './helpers';
 import { saveHtmlAsPdf } from './saveHtmlAsPdf';
+import { ExportPathAuthority } from './exportPathAuthority';
 import { sendAPIRequest } from './api';
 import { initScheduler } from './initSheduler';
+import {
+  DatabasePathAuthority,
+  DatabaseOperation,
+} from './databasePathAuthority';
+import {
+  assertDatabaseTarget,
+  assertNoDatabaseSidecars,
+  createDatabaseParent,
+  resolveDatabasePath,
+  verifyDatabaseFile,
+} from '../backend/database/files';
 
 export default function registerIpcMainActionListeners(main: Main) {
+  const authority = new DatabasePathAuthority(main);
+  const exports = new ExportPathAuthority(authority, () => [
+    ...databaseManager.getProtectedDatabasePaths(),
+    ...config.get('files', []).map((file) => file.dbPath),
+  ]);
+  let databaseOperationPending = false;
+  async function databaseOperation(action: () => Promise<unknown>) {
+    return getErrorHandledReponse(async () => {
+      if (databaseOperationPending) {
+        throw new Error('Another database filesystem operation is pending.');
+      }
+      databaseOperationPending = true;
+      try {
+        return await action();
+      } finally {
+        databaseOperationPending = false;
+      }
+    });
+  }
   ipcMain.handle(IPC_ACTIONS.CHECK_DB_ACCESS, async (_, filePath: string) => {
     try {
       await fs.access(filePath, constants.W_OK | constants.R_OK);
@@ -43,7 +76,21 @@ export default function registerIpcMainActionListeners(main: Main) {
 
   ipcMain.handle(
     IPC_ACTIONS.GET_DB_DEFAULT_PATH,
-    async (_, companyName: string) => {
+    async (event, companyName: string) => {
+      const window = authority.windowFor(event);
+      if (
+        typeof companyName !== 'string' ||
+        !companyName.trim() ||
+        companyName === '.' ||
+        companyName === '..' ||
+        /[<>:"/\\|?*\x00-\x1f]/.test(companyName) ||
+        /[. ]$/.test(companyName) ||
+        /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(companyName)
+      ) {
+        throw new TypeError(
+          'Company name must be a single valid filename component.'
+        );
+      }
       let root: string;
       try {
         root = app.getPath('documents');
@@ -56,20 +103,24 @@ export default function registerIpcMainActionListeners(main: Main) {
       }
 
       const dbsPath = path.join(root, 'Frappe Books');
-      const backupPath = path.join(dbsPath, 'backups');
-      await fs.ensureDir(backupPath);
 
       let dbFilePath = path.join(dbsPath, `${companyName}.books.db`);
 
       if (await fs.pathExists(dbFilePath)) {
-        const option = await dialog.showMessageBox({
+        const option = await dialog.showMessageBox(window, {
           type: 'question',
           title: 'File Exists',
           message: `Filename already exists. Do you want to overwrite the existing file or create a new one?`,
-          buttons: ['Overwrite', 'New'],
+          detail: `Filesystem path: ${displayFilePath(dbFilePath)}`,
+          buttons: ['Cancel', 'Overwrite', 'New'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
         });
 
-        if (option.response === 1) {
+        authority.assertWindow(event, window);
+        if (option.response !== 1 && option.response !== 2) return '';
+        if (option.response === 2) {
           const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, '');
 
           dbFilePath = path.join(
@@ -77,16 +128,81 @@ export default function registerIpcMainActionListeners(main: Main) {
             `${companyName}_${timestamp}.books.db`
           );
 
-          await dialog.showMessageBox({
+          await dialog.showMessageBox(window, {
             type: 'info',
             message: `New file: ${path.basename(dbFilePath)}`,
           });
         }
       }
 
-      return dbFilePath;
+      authority.assertWindow(event, window);
+      return authority.grant(event, 'create', dbFilePath);
     }
   );
+
+  ipcMain.handle(
+    IPC_ACTIONS.GET_OPEN_DATABASE_FILEPATH,
+    async (
+      event,
+      operation: Exclude<DatabaseOperation, 'create'>,
+      defaultPath?: string
+    ) => {
+      const window = authority.windowFor(event);
+      if (operation !== 'connect' && operation !== 'delete') {
+        throw new TypeError('Invalid database selection operation.');
+      }
+      if (defaultPath !== undefined) resolveDatabasePath(defaultPath);
+      if (defaultPath && authority.has(operation, defaultPath)) {
+        try {
+          const target = await authority.get(event, operation, defaultPath);
+          return { canceled: false, filePaths: [target.path] };
+        } catch {
+          authority.assertWindow(event, window);
+        }
+      }
+      const result = await dialog.showOpenDialog(window, {
+        title:
+          operation === 'delete'
+            ? 'Select database to delete'
+            : 'Select database',
+        defaultPath,
+        properties: ['openFile', 'dontAddToRecent', 'noResolveAliases'],
+      });
+      authority.assertWindow(event, window);
+      if (result.canceled || !result.filePaths[0]) {
+        return { canceled: true, filePaths: [] };
+      }
+      const selectedPath = await authority.grant(
+        event,
+        operation,
+        result.filePaths[0]
+      );
+      return { ...result, filePaths: [selectedPath] };
+    }
+  );
+
+  ipcMain.handle(
+    IPC_ACTIONS.GET_SAVE_DATABASE_FILEPATH,
+    async (event, defaultPath?: string) => {
+      const window = authority.windowFor(event);
+      if (defaultPath !== undefined) resolveDatabasePath(defaultPath);
+      const result = await dialog.showSaveDialog(window, {
+        title: 'Select database location',
+        defaultPath,
+      });
+      authority.assertWindow(event, window);
+      if (result.canceled || !result.filePath) {
+        return { canceled: true, filePath: undefined };
+      }
+      const filePath = await authority.grant(event, 'create', result.filePath);
+      return { ...result, filePath };
+    }
+  );
+
+  ipcMain.handle(IPC_ACTIONS.GET_DB_RECOVERY_PATH, (event, dbPath: string) => {
+    authority.windowFor(event);
+    return databaseManager.getRecoveryPath(resolveDatabasePath(dbPath));
+  });
 
   ipcMain.handle(
     IPC_ACTIONS.GET_OPEN_FILEPATH,
@@ -97,8 +213,8 @@ export default function registerIpcMainActionListeners(main: Main) {
 
   ipcMain.handle(
     IPC_ACTIONS.GET_SAVE_FILEPATH,
-    async (_, options: SaveDialogOptions) => {
-      return await dialog.showSaveDialog(main.mainWindow!, options);
+    async (event, name: string, format: ExportFormat) => {
+      return exports.select(event, name, format);
     }
   );
 
@@ -123,27 +239,34 @@ export default function registerIpcMainActionListeners(main: Main) {
   ipcMain.handle(
     IPC_ACTIONS.SAVE_HTML_AS_PDF,
     async (
-      _,
+      event,
       html: string,
       savePath: string,
       width: number,
-      height: number
+      height: number,
+      grantId: string
     ) => {
-      return await saveHtmlAsPdf(html, savePath, app, width, height);
+      const grant = exports.consume(event, 'pdf', savePath, grantId);
+      const data = await saveHtmlAsPdf(html, app, width, height);
+      await exports.write(grant, data);
+      return true;
     }
   );
 
   ipcMain.handle(
     IPC_ACTIONS.PRINT_HTML_DOCUMENT,
-    async (_, html: string, width: number, height: number) => {
+    async (event, html: string, width: number, height: number) => {
+      authority.windowFor(event);
       return await printHtmlDocument(html, app, width, height);
     }
   );
 
   ipcMain.handle(
     IPC_ACTIONS.SAVE_DATA,
-    async (_, data: string, savePath: string) => {
-      return await fs.writeFile(savePath, data, { encoding: 'utf-8' });
+    async (event, data: string, savePath: string, grantId: string) => {
+      const grant = exports.consume(event, 'text', savePath, grantId);
+      if (typeof data !== 'string') throw new TypeError('Invalid export data.');
+      await exports.write(grant, data);
     }
   );
 
@@ -224,13 +347,25 @@ export default function registerIpcMainActionListeners(main: Main) {
     return getUrlAndTokenString();
   });
 
-  ipcMain.handle(IPC_ACTIONS.DELETE_FILE, async (_, filePath: string) => {
-    return getErrorHandledReponse(async () => {
-      const targetPath = resolveFilePath(filePath);
-      if (!(await confirmFileOperation(main, targetPath, false))) {
+  ipcMain.handle(IPC_ACTIONS.DELETE_FILE, async (event, filePath: string) => {
+    return databaseOperation(async () => {
+      const window = authority.windowFor(event);
+      const target = await authority.get(event, 'delete', filePath, true);
+      if (!(await confirmFileOperation(main, target.path, false))) {
         return;
       }
-      return await fs.unlink(targetPath);
+      authority.assertWindow(event, window);
+      if (
+        databaseManager.db?.dbPath === target.path &&
+        databaseManager.db.knex
+      ) {
+        throw new Error('Close the database before deleting it.');
+      }
+      await assertNoDatabaseSidecars(target.path);
+      await verifyDatabaseFile(target.path);
+      await assertDatabaseTarget(target);
+      authority.assertWindow(event, window);
+      return await fs.unlink(target.path);
     });
   });
 
@@ -277,10 +412,15 @@ export default function registerIpcMainActionListeners(main: Main) {
 
   ipcMain.handle(
     IPC_ACTIONS.DB_CREATE,
-    async (_, dbPath: string, countryCode: string) => {
-      return await getErrorHandledReponse(async () => {
+    async (event, dbPath: string, countryCode: string) => {
+      return await databaseOperation(async () => {
+        const window = authority.windowFor(event);
         const targetPath =
-          dbPath === ':memory:' ? dbPath : resolveFilePath(dbPath);
+          dbPath === ':memory:' ? dbPath : resolveDatabasePath(dbPath);
+        let target =
+          targetPath === ':memory:'
+            ? undefined
+            : await authority.get(event, 'create', targetPath, true);
         if (
           targetPath !== ':memory:' &&
           !(await confirmFileOperation(main, targetPath, true))
@@ -289,24 +429,67 @@ export default function registerIpcMainActionListeners(main: Main) {
             code: DB_CREATE_CANCELLED_CODE,
           });
         }
-        return await databaseManager.createNewDatabase(targetPath, countryCode);
+        authority.assertWindow(event, window);
+        if (target) {
+          await assertDatabaseTarget(target);
+          target = await createDatabaseParent(target, () =>
+            authority.assertWindow(event, window)
+          );
+        }
+        authority.clearConnection();
+        const result = await databaseManager.createNewDatabase(
+          targetPath,
+          countryCode,
+          target,
+          () => authority.assertWindow(event, window)
+        );
+        if (target) await authority.grant(event, 'connect', targetPath);
+        authority.bindConnection(event, targetPath);
+        return result;
       });
     }
   );
 
   ipcMain.handle(
     IPC_ACTIONS.DB_CONNECT,
-    async (_, dbPath: string, countryCode?: string) => {
-      return await getErrorHandledReponse(async () => {
-        return await databaseManager.connectToDatabase(dbPath, countryCode);
+    async (event, dbPath: string, countryCode?: string) => {
+      return await databaseOperation(async () => {
+        const window = authority.windowFor(event);
+        const targetPath =
+          dbPath === ':memory:' ? dbPath : resolveDatabasePath(dbPath);
+        const target =
+          targetPath !== ':memory:'
+            ? await authority.get(event, 'connect', targetPath, true)
+            : undefined;
+        authority.assertWindow(event, window);
+        authority.clearConnection();
+        const result = await databaseManager.connectToDatabase(
+          targetPath,
+          countryCode,
+          () => authority.assertWindow(event, window),
+          target
+        );
+        authority.assertWindow(event, window);
+        if (targetPath !== ':memory:') {
+          await authority.grant(event, 'connect', targetPath);
+        }
+        authority.bindConnection(event, targetPath);
+        return result;
       });
     }
   );
 
   ipcMain.handle(
     IPC_ACTIONS.DB_CALL,
-    async (_, method: DatabaseMethod, ...args: unknown[]) => {
+    async (event, method: DatabaseMethod, ...args: unknown[]) => {
       return await getErrorHandledReponse(async () => {
+        if (method === 'close') {
+          authority.windowFor(event);
+          const result = await databaseManager.call(method, ...args);
+          authority.clearConnection();
+          return result;
+        }
+        await authority.assertConnection(event);
         return await databaseManager.call(method, ...args);
       });
     }
@@ -314,29 +497,20 @@ export default function registerIpcMainActionListeners(main: Main) {
 
   ipcMain.handle(
     IPC_ACTIONS.DB_BESPOKE,
-    async (_, method: string, ...args: unknown[]) => {
+    async (event, method: string, ...args: unknown[]) => {
       return await getErrorHandledReponse(async () => {
+        await authority.assertConnection(event);
         return await databaseManager.callBespoke(method, ...args);
       });
     }
   );
 
-  ipcMain.handle(IPC_ACTIONS.DB_SCHEMA, async () => {
+  ipcMain.handle(IPC_ACTIONS.DB_SCHEMA, async (event) => {
     return await getErrorHandledReponse(() => {
+      authority.windowFor(event);
       return databaseManager.getSchemaMap();
     });
   });
-}
-
-function resolveFilePath(filePath: unknown): string {
-  if (
-    typeof filePath !== 'string' ||
-    filePath.length === 0 ||
-    filePath.includes('\0')
-  ) {
-    throw new TypeError('Invalid filesystem path.');
-  }
-  return path.resolve(filePath);
 }
 
 async function confirmFileOperation(
@@ -349,16 +523,13 @@ async function confirmFileOperation(
     throw new Error('No active window for filesystem confirmation.');
   }
 
-  const displayPath = JSON.stringify(targetPath).replace(
-    /[\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
-  );
+  const displayPath = displayFilePath(targetPath);
   const { response } = await dialog.showMessageBox(window, {
     type: 'warning',
-    title: createDatabase ? 'Create or replace database' : 'Delete file',
+    title: createDatabase ? 'Create or replace database' : 'Delete database',
     message: createDatabase
-      ? 'Create a database at this location? Any filesystem entry at this exact path will be replaced.'
-      : 'Permanently delete the filesystem entry at this location?',
+      ? 'Create a database at this location? An existing database will be retained in a separate recovery file before replacement.'
+      : 'Permanently delete the database file at this location?',
     detail: `Filesystem path: ${displayPath}`,
     buttons: ['Cancel', createDatabase ? 'Create' : 'Delete'],
     defaultId: 0,

@@ -25,6 +25,7 @@ import { fyo } from 'src/initFyo';
 import router from 'src/router';
 import { assertIsType } from 'utils/index';
 import { SelectFileOptions } from 'utils/types';
+import type { ExportFormat } from 'utils/ipc/types';
 import { RouteLocationRaw } from 'vue-router';
 import { evaluateHidden } from './doc';
 import { showDialog, showToast } from './interactive';
@@ -1028,6 +1029,9 @@ export function showExportInFolder(message: string, filePath: string) {
 }
 
 export async function deleteDb(filePath: string) {
+  const selection = await ipc.getOpenDatabaseFilePath('delete', filePath);
+  if (selection.canceled || !selection.filePaths[0]) return;
+  filePath = selection.filePaths[0];
   const { error } = await ipc.deleteFile(filePath);
 
   if (error?.code === 'EBUSY') {
@@ -1057,25 +1061,13 @@ export async function deleteDb(filePath: string) {
 }
 
 export async function getSelectedFilePath() {
-  return ipc.getOpenFilePath({
-    title: t`Select file`,
-    properties: ['openFile'],
-    filters: [{ name: 'SQLite DB File', extensions: ['db'] }],
-  });
+  return ipc.getOpenDatabaseFilePath('connect');
 }
 
-export async function getSavePath(name: string, extention: string) {
-  const response = await ipc.getSaveFilePath({
-    title: t`Select folder`,
-    defaultPath: `${name}.${extention}`,
-  });
+export async function getSaveDatabasePath(name: string) {
+  return ipc.getSaveDatabaseFilePath(name);
+}
 
-  const canceled = response.canceled;
-  let filePath = response.filePath;
-
-  if (filePath && !filePath.endsWith(extention) && filePath !== ':memory:') {
-    filePath = `${filePath}.${extention}`;
-  }
-
-  return { canceled, filePath };
+export async function getSavePath(name: string, extention: ExportFormat) {
+  return ipc.getSaveFilePath(name, extention);
 }

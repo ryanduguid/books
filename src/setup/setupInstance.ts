@@ -25,6 +25,7 @@ import { getRandomString } from 'utils';
 import { getDefaultLocations, getDefaultUOMs } from 'utils/defaults';
 import { getCountryCodeFromCountry, getCountryInfo } from 'utils/misc';
 import { CountryInfo } from 'utils/types';
+import { addDatabaseRecoveryToError } from 'src/utils/db';
 import { CreateCOA } from './createCOA';
 import { SetupWizardOptions } from './types';
 
@@ -59,6 +60,9 @@ export default async function setupInstance(
     if (!Object.keys(fyo.currencySymbols).length) {
       await setCurrencySymbols(fyo);
     }
+  } catch (error) {
+    if (fyo.isElectron) await addDatabaseRecoveryToError(error, dbPath);
+    throw error;
   } finally {
     fyo.store.skipTelemetryLogging = false;
   }

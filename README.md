@@ -1,6 +1,12 @@
 > [!IMPORTANT]  
 > **Frappe Books is currently blocked from releasing new updates due to a lack of support from Frappe in renewing essential code-signing certificates.** [Read more](https://github.com/flathub/io.frappe.books/issues/16#issuecomment-4638748707)
 
+**Fork status**
+
+[![Fork code quality](https://app.codacy.com/project/badge/Grade/f3b10bfea9ca4e4081e6aa1ff2e2c00d?branch=master)](https://app.codacy.com/gh/ryanduguid/books/dashboard)
+[![Fork Test](https://github.com/ryanduguid/books/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/ryanduguid/books/actions/workflows/test.yml)
+[![Fork Lint](https://github.com/ryanduguid/books/actions/workflows/lint.yml/badge.svg?branch=master)](https://github.com/ryanduguid/books/actions/workflows/lint.yml)
+
 <div align="center" markdown="1">
 <br/>
 

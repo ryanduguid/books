@@ -453,13 +453,13 @@ export async function getPathAndMakePDF(
   shouldPrint?: boolean
 ) {
   if (!shouldPrint) {
-    const { filePath: savePath } = await getSavePath(name, 'pdf');
-    if (!savePath) {
+    const { filePath: savePath, grantId } = await getSavePath(name, 'pdf');
+    if (!savePath || !grantId) {
       return;
     }
 
     const html = constructPrintDocument(innerHTML);
-    const success = await ipc.makePDF(html, savePath, width, height);
+    const success = await ipc.makePDF(html, savePath, width, height, grantId);
     if (success) {
       showExportInFolder(t`Save as PDF Successful`, savePath);
     } else {

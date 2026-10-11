@@ -1,7 +1,5 @@
 import { App } from 'electron';
-import path from 'path';
-import fs from 'fs-extra';
-import { getInitializedPrintWindow } from './saveHtmlAsPdf';
+import { withPrintWindow } from './printWindow';
 
 export async function printHtmlDocument(
   html: string,
@@ -9,20 +7,17 @@ export async function printHtmlDocument(
   width: number,
   height: number
 ): Promise<boolean> {
-  const tempRoot = app.getPath('temp');
-  const tempFile = path.join(tempRoot, `temp-print.html`);
-  await fs.writeFile(tempFile, html, { encoding: 'utf-8' });
-
-  const printWindow = await getInitializedPrintWindow(tempFile, width, height);
-
-  const success = await new Promise<boolean>((resolve) => {
-    printWindow.webContents.print(
-      { silent: false, printBackground: true },
-      (success) => resolve(success)
-    );
-  });
-
-  printWindow.close();
-  await fs.unlink(tempFile);
-  return success;
+  return withPrintWindow(
+    html,
+    app,
+    width,
+    height,
+    (window) =>
+      new Promise<boolean>((resolve) => {
+        window.webContents.print(
+          { silent: false, printBackground: true },
+          (success) => resolve(success)
+        );
+      })
+  );
 }
