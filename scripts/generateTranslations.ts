@@ -107,7 +107,7 @@ function tStringsToArray(
     tSet.add(ts);
   }
 
-  return Array.from(tSet).sort();
+  return Array.from(tSet).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function printHelp() {

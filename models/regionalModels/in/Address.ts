@@ -29,7 +29,7 @@ export class Address extends BaseAddress {
 
     pos: {
       formula: () => {
-        const stateList = Object.values(codeStateMap).sort();
+        const stateList = Object.values(codeStateMap);
         const state = this.state as string;
         if (stateList.includes(state)) {
           return state;
@@ -43,7 +43,7 @@ export class Address extends BaseAddress {
   static lists: ListsMap = {
     ...BaseAddress.lists,
     pos: () => {
-      return Object.values(codeStateMap).sort();
+      return Object.values(codeStateMap).sort((a, b) => a.localeCompare(b));
     },
   };
 }

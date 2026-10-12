@@ -184,7 +184,9 @@ export class Shortcuts {
     const _modMap = modMap || this.modMap;
     this.modMap = {};
 
-    const shortcutString = shortcut.sort().join('+');
+    const shortcutString = shortcut
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+      .join('+');
     const modString = mods.filter((k) => _modMap[k]).join('+');
     if (shortcutString && modString) {
       return modString + '+' + shortcutString;

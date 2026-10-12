@@ -13,7 +13,7 @@ export function validateEmail(value: DocValue) {
     );
   }
 
-  const isValid = /(.+)@(.+){2,}\.(.+){2,}/.test(value);
+  const isValid = /(.+)@(.{2,})\.(.{2,})/.test(value);
   if (!isValid) {
     throw new ValidationError(`Invalid email: ${value}`);
   }

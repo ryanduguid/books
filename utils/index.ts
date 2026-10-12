@@ -233,7 +233,9 @@ export function joinMapLists<A, B>(
     .map((i) => i[keyB])
     .filter((k) => (k as unknown as string) in mapA);
 
-  const keys = new Set([keyListA, keyListB].flat().sort());
+  const keys = new Set(
+    [keyListA, keyListB].flat().sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  );
 
   const joint: (A & B)[] = [];
   for (const k of keys) {
