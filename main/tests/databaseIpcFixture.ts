@@ -3,12 +3,17 @@ import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import path from 'path';
 import { loadSource } from './helpers';
-import type {
-  MessageBoxOptions,
-  OpenDialogReturnValue,
-  SaveDialogReturnValue,
-} from 'electron';
 import type { BackendResponse, ExportSelection } from '../../utils/ipc/types';
+
+type DialogOptions = {
+  buttons?: string[];
+  detail?: string;
+  defaultId?: number;
+  cancelId?: number;
+  [name: string]: unknown;
+};
+type OpenSelection = { canceled: boolean; filePaths: string[] };
+type SaveSelection = { canceled: boolean; filePath?: string };
 
 type Handler<Result> = (...args: unknown[]) => Result;
 type AsyncHandler<Result> = Handler<Promise<Result>>;
@@ -28,9 +33,9 @@ type FixtureHandlers = {
   'get-db-recovery-path': Handler<string | undefined>;
   'get-db-default-path': AsyncHandler<string>;
   'check-db-access': AsyncHandler<boolean>;
-  'open-dialog': AsyncHandler<OpenDialogReturnValue>;
-  'open-database-dialog': AsyncHandler<OpenDialogReturnValue>;
-  'save-database-dialog': AsyncHandler<SaveDialogReturnValue>;
+  'open-dialog': AsyncHandler<OpenSelection>;
+  'open-database-dialog': AsyncHandler<OpenSelection>;
+  'save-database-dialog': AsyncHandler<SaveSelection>;
   'save-dialog': AsyncHandler<ExportSelection>;
   'save-data': AsyncHandler<unknown>;
   'save-html-as-pdf': AsyncHandler<unknown>;
@@ -43,21 +48,25 @@ const databaseActions = {
   delete: 'delete-file',
 } as const;
 
-export function getHandlers(directory?: string, databaseManager?: object) {
-  const handlers: Record<string, Handler<unknown>> = {};
-  const calls = {
+function createCalls() {
+  return {
     unlink: [] as string[],
     create: [] as unknown[][],
     connect: [] as unknown[][],
     dbCalls: [] as unknown[][],
     language: [] as string[],
-    dialogs: [] as { parent: unknown; options: MessageBoxOptions }[],
+    dialogs: [] as { parent: unknown; options: DialogOptions }[],
     selections: [] as { parent: unknown; options: unknown }[],
     directories: [] as string[],
     access: [] as { path: string; mode: number }[],
     targetLookups: [] as string[],
     pdf: 0,
   };
+}
+
+export function getHandlers(directory?: string, databaseManager?: object) {
+  const handlers: Record<string, Handler<unknown>> = {};
+  const calls = createCalls();
   let response = 0;
   let selectionCancelled = false;
   let selectedPath = '';
@@ -135,10 +144,7 @@ export function getHandlers(directory?: string, databaseManager?: object) {
           },
         },
         dialog: {
-          showMessageBox: async (
-            parent: unknown,
-            options: MessageBoxOptions
-          ) => {
+          showMessageBox: async (parent: unknown, options: DialogOptions) => {
             calls.dialogs.push({ parent, options });
             await onDialog();
             return { response };
@@ -208,10 +214,7 @@ export function getHandlers(directory?: string, databaseManager?: object) {
                 filePath: selectedPath || undefined,
               };
             },
-            showMessageBox: async (
-              parent: unknown,
-              options: MessageBoxOptions
-            ) => {
+            showMessageBox: async (parent: unknown, options: DialogOptions) => {
               calls.dialogs.push({ parent, options });
               await onDialog();
               return { response };
@@ -260,18 +263,15 @@ export function getHandlers(directory?: string, databaseManager?: object) {
   );
   listener.default(main);
   const registered = handlers as FixtureHandlers;
-  function grant(
-    operation: 'create',
-    value: string
-  ): Promise<SaveDialogReturnValue>;
+  function grant(operation: 'create', value: string): Promise<SaveSelection>;
   function grant(
     operation: 'connect' | 'delete',
     value: string
-  ): Promise<OpenDialogReturnValue>;
+  ): Promise<OpenSelection>;
   function grant(
     operation: keyof typeof databaseActions,
     value: string
-  ): Promise<SaveDialogReturnValue | OpenDialogReturnValue>;
+  ): Promise<SaveSelection | OpenSelection>;
   async function grant(operation: keyof typeof databaseActions, value: string) {
     selectedPath = value;
     selectionCancelled = false;
@@ -316,9 +316,14 @@ export function getHandlers(directory?: string, databaseManager?: object) {
 export async function withFixture(run: (directory: string) => Promise<void>) {
   const temporaryRoot = await fs.realpath(tmpdir());
   const directory = await fs.mkdtemp(path.join(temporaryRoot, 'books-ipc-'));
+  let failure: { error: unknown } | undefined;
   try {
     await run(directory);
-  } finally {
+  } catch (error) {
+    failure = { error };
+  }
+
+  try {
     const resolved = await fs.realpath(directory);
     if (
       resolved !== path.resolve(directory) ||
@@ -328,5 +333,15 @@ export async function withFixture(run: (directory: string) => Promise<void>) {
       throw new Error('Unexpected fixture cleanup path.');
     }
     await fs.rm(directory, { recursive: true, force: true });
+  } catch (error) {
+    if (failure) {
+      throw new AggregateError(
+        [failure.error, error],
+        'Fixture execution and cleanup both failed.'
+      );
+    }
+    throw error;
   }
+
+  if (failure) throw failure.error;
 }
