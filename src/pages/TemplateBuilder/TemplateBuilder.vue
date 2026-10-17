@@ -777,12 +777,20 @@ export default defineComponent({
         });
       }
 
-      const { canceled, filePath } = await getSavePath(name, 'template.html');
+      const { canceled, filePath, grantId } = await getSavePath(
+        name,
+        'template.html'
+      );
       if (canceled || !filePath) {
         return;
       }
 
-      await saveExportData(template, filePath, this.t`Template file saved`);
+      await saveExportData(
+        template,
+        filePath,
+        grantId,
+        this.t`Template file saved`
+      );
     },
   },
 });

@@ -2,12 +2,21 @@ import fs from 'fs/promises';
 import { RawValueMap } from 'fyo/core/types';
 import { Knex } from 'knex';
 import path from 'path';
-import { changeKeys, deleteKeys, getIsNullOrUndef, invertMap } from 'utils';
+import { changeKeys, deleteKeys, getIsNullOrUndef } from 'utils';
 import { getCountryCodeFromCountry } from 'utils/misc';
 import { Version } from 'utils/version';
 import { ModelNameEnum } from '../../models/types';
 import { FieldTypeEnum, Schema, SchemaMap } from '../../schemas/types';
 import { DatabaseManager } from '../database/manager';
+import {
+  addRecoveryToError,
+  assertDatabaseTarget,
+  captureDatabaseTarget,
+  DatabaseTarget,
+  finishDatabaseCleanup,
+  promoteDatabase,
+  removeOwnedDatabaseDirectory,
+} from '../database/files';
 
 const ignoreColumns = ['keywords'];
 const columnMap = { creation: 'created', owner: 'createdBy' };
@@ -33,7 +42,9 @@ async function execute(dm: DatabaseManager) {
   const version = (
     (await sourceKnex('SingleValue')
       .select('value')
-      .where({ fieldname: 'version' })) as { value: string }[]
+      .where({ fieldname: 'version', parent: 'SystemSettings' })) as {
+      value: string;
+    }[]
   )?.[0]?.value;
 
   /**
@@ -43,53 +54,85 @@ async function execute(dm: DatabaseManager) {
   if (version && Version.gt(version, '0.4.3-beta.0')) {
     return;
   }
+  await preflight(dm);
 
   /**
    * Initialize a different db to copy all the updated
    * data into.
    */
   const countryCode = await getCountryCode(sourceKnex);
-  const destDm = await getDestinationDM(dm.db!.dbPath, countryCode);
+  const sourceTarget = await captureDatabaseTarget(dm.db!.dbPath);
+  await dm.checkDatabaseTarget();
+  const temporaryDirectory = await fs.mkdtemp(
+    path.join(path.dirname(dm.db!.dbPath), '__update_schemas-')
+  );
+  const destDm = new DatabaseManager();
+  const temporaryIdentity = await fs.lstat(temporaryDirectory);
+  let primaryError: unknown;
 
   /**
    * Copy data from all the relevant tables
    * the other tables will be empty cause unused.
    */
   try {
+    await destDm._connect(
+      path.join(temporaryDirectory, 'database.db'),
+      'create',
+      countryCode
+    );
+    await destDm.db!.migrate();
+    await destDm.db!.truncate();
     await copyData(sourceKnex, destDm);
-  } catch (err) {
-    const destPath = destDm.db!.dbPath;
-    await destDm.db!.close();
-    await fs.unlink(destPath);
-    throw err;
+
+    /**
+     * Version will update when migration completes, this
+     * is set to prevent this patch from running again.
+     */
+    await destDm.db!.update(ModelNameEnum.SystemSettings, {
+      version: '0.5.0-beta.0',
+    });
+
+    /**
+     * Replace the database with the new one.
+     */
+    await assertDatabaseTarget(sourceTarget);
+    await replaceDatabaseCore(dm, destDm, sourceTarget);
+  } catch (error) {
+    primaryError = error;
+    addRecoveryToError(error, dm.getRecoveryPath(sourceTarget.path));
   }
-
-  /**
-   * Version will update when migration completes, this
-   * is set to prevent this patch from running again.
-   */
-  await destDm.db!.update(ModelNameEnum.SystemSettings, {
-    version: '0.5.0-beta.0',
-  });
-
-  /**
-   * Replace the database with the new one.
-   */
-  await replaceDatabaseCore(dm, destDm);
+  try {
+    await finishDatabaseCleanup(primaryError, [
+      () => destDm.db?.close(),
+      () => removeOwnedDatabaseDirectory(temporaryDirectory, temporaryIdentity),
+    ]);
+  } catch (error) {
+    addRecoveryToError(error, dm.getRecoveryPath(sourceTarget.path));
+    throw error;
+  }
 }
 
 async function replaceDatabaseCore(
   dm: DatabaseManager,
-  destDm: DatabaseManager
+  destDm: DatabaseManager,
+  sourceTarget: DatabaseTarget
 ) {
   const newDbPath = destDm.db!.dbPath; // new db with new schema
   const oldDbPath = dm.db!.dbPath; // old db to be replaced
 
   await dm.db!.close();
   await destDm.db!.close();
-  await fs.unlink(oldDbPath);
-  await fs.rename(newDbPath, oldDbPath);
-  await dm._connect(oldDbPath);
+  dm.validateDatabaseOperation();
+  await assertDatabaseTarget(sourceTarget, true);
+  await dm.checkDatabaseTarget();
+  const target = await captureDatabaseTarget(oldDbPath);
+  await dm.ensureMigrationRecovery();
+  const promoted = await promoteDatabase(newDbPath, target, () =>
+    dm.validateDatabaseOperation()
+  );
+  dm.acceptPromotedTarget(promoted);
+  await dm.checkDatabaseTarget();
+  await dm._connect(oldDbPath, 'existing');
 }
 
 async function copyData(sourceKnex: Knex, destDm: DatabaseManager) {
@@ -123,43 +166,69 @@ async function copyNumberSeries(
   const values = (await sourceKnex(
     ModelNameEnum.NumberSeries
   )) as RawValueMap[];
-
-  const refMap = invertMap(defaultNumberSeriesMap);
-
-  for (const value of values) {
-    if (value.referenceType) {
-      continue;
-    }
-
-    const name = value.name as string;
-    const referenceType = refMap[name];
-    if (!referenceType) {
-      delete value.name;
-      continue;
-    }
-
-    const indices = (await sourceKnex.raw(
-      `
-      select cast(substr(name, ??) as int) as idx
-      from ?? 
-      order by idx desc 
-      limit 1`,
-      [name.length + 1, referenceType]
-    )) as { idx: number }[];
-
-    value.start = 1001;
-    value.current = indices[0]?.idx ?? value.current ?? value.start;
-    value.referenceType = referenceType;
-  }
+  validateNumberSeries(values, schema);
 
   await copyValues(
     destKnex,
     ModelNameEnum.NumberSeries,
-    values.filter((v) => v.name),
+    values,
     [],
     {},
     schema
   );
+  const copied = (await destKnex(ModelNameEnum.NumberSeries)) as RawValueMap[];
+  const fields = ['name', 'referenceType', 'start', 'current', 'padZeros'];
+  if (
+    copied.length !== values.length ||
+    values.some((value) => {
+      const match = copied.find((row) => row.name === value.name);
+      return !match || fields.some((field) => match[field] !== value[field]);
+    })
+  ) {
+    throw new Error('Number series changed during migration.');
+  }
+}
+
+async function preflight(dm: DatabaseManager) {
+  if (dm.db?.dbPath === ':memory:') return;
+  const knex = dm.db!.knex!;
+  if (!(await knex.schema.hasTable('SingleValue'))) return;
+  const version = (await knex('SingleValue')
+    .where({ fieldname: 'version', parent: 'SystemSettings' })
+    .first()) as { value?: string } | undefined;
+  if (version?.value && Version.gt(version.value, '0.4.3-beta.0')) return;
+  if (!(await knex.schema.hasTable(ModelNameEnum.NumberSeries))) return;
+  const values = (await knex(ModelNameEnum.NumberSeries)) as RawValueMap[];
+  validateNumberSeries(values, dm.getSchemaMap()[ModelNameEnum.NumberSeries]!);
+}
+
+function validateNumberSeries(values: RawValueMap[], schema: Schema) {
+  const field = schema.fields.find(
+    (field) => field.fieldname === 'referenceType'
+  );
+  const supported = (field && 'options' in field ? field.options : []).map(
+    (option) => option.value
+  );
+  const names = new Set<string>();
+  for (const value of values) {
+    if (
+      typeof value.name !== 'string' ||
+      !value.name ||
+      names.has(value.name) ||
+      typeof value.referenceType !== 'string' ||
+      !supported.includes(value.referenceType) ||
+      ['start', 'current', 'padZeros'].some(
+        (key) => !Number.isSafeInteger(value[key]) || Number(value[key]) < 0
+      )
+    ) {
+      throw new Error(
+        `Number series ${String(
+          value.name
+        )} cannot be migrated safely. Its reference type or counter settings require review. The source database is retained.`
+      );
+    }
+    names.add(value.name);
+  }
 }
 
 async function copyLedgerEntries(
@@ -340,21 +409,6 @@ async function copyValues(
   await destKnex.batchInsert(destTableName, values, 100);
 }
 
-async function getDestinationDM(sourceDbPath: string, countryCode: string) {
-  /**
-   * This is where all the stuff from the old db will be copied.
-   * That won't be altered cause schema update will cause data loss.
-   */
-
-  const dir = path.parse(sourceDbPath).dir;
-  const dbPath = path.join(dir, '__update_schemas_temp.db');
-  const dm = new DatabaseManager();
-  await dm._connect(dbPath, countryCode);
-  await dm.db!.migrate();
-  await dm.db!.truncate();
-  return dm;
-}
-
 async function getCountryCode(knex: Knex) {
   /**
    * Need to account for schema changes, in 0.4.3-beta.0
@@ -405,4 +459,4 @@ function deleteOldKeys(map: RawValueMap, newKeys: string[]) {
   }
 }
 
-export default { execute, beforeMigrate: true };
+export default { execute, preflight, beforeMigrate: true };

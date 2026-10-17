@@ -25,6 +25,7 @@ import { getRandomString } from 'utils';
 import { getDefaultLocations, getDefaultUOMs } from 'utils/defaults';
 import { getCountryCodeFromCountry, getCountryInfo } from 'utils/misc';
 import { CountryInfo } from 'utils/types';
+import { addDatabaseRecoveryToError } from 'src/utils/db';
 import { CreateCOA } from './createCOA';
 import { SetupWizardOptions } from './types';
 
@@ -37,29 +38,34 @@ export default async function setupInstance(
     setupWizardOptions;
 
   fyo.store.skipTelemetryLogging = true;
-  await initializeDatabase(dbPath, country, fyo);
-  await updateSystemSettings(setupWizardOptions, fyo);
-  await updateAccountingSettings(setupWizardOptions, fyo);
-  await updatePrintSettings(setupWizardOptions, fyo);
+  try {
+    await initializeDatabase(dbPath, country, fyo);
+    await updateSystemSettings(setupWizardOptions, fyo);
+    await updateAccountingSettings(setupWizardOptions, fyo);
+    await updatePrintSettings(setupWizardOptions, fyo);
 
-  await createCurrencyRecords(fyo);
-  await createAccountRecords(bankName, country, chartOfAccounts, fyo);
-  await createRegionalRecords(country, fyo);
-  await createDefaultEntries(fyo);
-  await createDefaultNumberSeries(fyo);
-  await updateInventorySettings(fyo);
+    await createCurrencyRecords(fyo);
+    await createAccountRecords(bankName, country, chartOfAccounts, fyo);
+    await createRegionalRecords(country, fyo);
+    await createDefaultEntries(fyo);
+    await createDefaultNumberSeries(fyo);
+    await updateInventorySettings(fyo);
 
-  if (fyo.isElectron) {
-    const { updatePrintTemplates } = await import('src/utils/printTemplates');
-    await updatePrintTemplates(fyo);
+    if (fyo.isElectron) {
+      const { updatePrintTemplates } = await import('src/utils/printTemplates');
+      await updatePrintTemplates(fyo);
+    }
+
+    await completeSetup(companyName, fyo);
+    if (!Object.keys(fyo.currencySymbols).length) {
+      await setCurrencySymbols(fyo);
+    }
+  } catch (error) {
+    if (fyo.isElectron) await addDatabaseRecoveryToError(error, dbPath);
+    throw error;
+  } finally {
+    fyo.store.skipTelemetryLogging = false;
   }
-
-  await completeSetup(companyName, fyo);
-  if (!Object.keys(fyo.currencySymbols).length) {
-    await setCurrencySymbols(fyo);
-  }
-
-  fyo.store.skipTelemetryLogging = false;
 }
 
 async function createDefaultEntries(fyo: Fyo) {

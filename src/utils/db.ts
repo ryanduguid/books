@@ -11,6 +11,33 @@ export const dbErrorActionSymbols = {
   CancelSelection: Symbol('cancel-selection'),
 } as const;
 
+export async function addDatabaseRecoveryToError(
+  error: unknown,
+  dbPath: string
+) {
+  if (!(error instanceof Error)) return;
+  try {
+    const recoveryPath = await ipc.getDbRecoveryPath(dbPath);
+    if (!recoveryPath) return;
+    const displayPath = JSON.stringify(recoveryPath).replace(
+      /[\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g,
+      (character) =>
+        `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+    );
+    if (error.message.includes(displayPath)) return;
+    Object.assign(error, { recoveryPath });
+    error.message += `\nOriginal database recovery file: ${displayPath}`;
+  } catch {}
+}
+
+export async function showDatabaseError(error: unknown, dbPath?: string) {
+  if (dbPath) await addDatabaseRecoveryToError(error, dbPath);
+  await ipc.showError(
+    t`Database operation failed`,
+    error instanceof Error ? error.message : String(error)
+  );
+}
+
 const dbErrors = {
   DirectoryDoesNotExist: 'directory does not exist',
   UnableToAcquireConnection: 'Unable to acquire a connection',
@@ -90,5 +117,5 @@ async function showDbErrorDialog(detail: string) {
         isEscape: true,
       },
     ],
-  });
+  }) as Promise<typeof dbErrorActionSymbols[keyof typeof dbErrorActionSymbols]>;
 }

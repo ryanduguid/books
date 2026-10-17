@@ -45,6 +45,7 @@ export interface Patch {
   version: string;
   patch: {
     execute: (dm: DatabaseManager) => Promise<void>;
+    preflight?: (dm: DatabaseManager) => Promise<void>;
     beforeMigrate?: boolean;
   };
   priority?: number;

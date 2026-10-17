@@ -1,3 +1,4 @@
+import BetterSQLite3 from 'better-sqlite3';
 import { getDbError, NotFoundError, ValueError } from 'fyo/utils/errors';
 import { knex, Knex } from 'knex';
 import {
@@ -25,6 +26,9 @@ import {
   SingleValue,
   UpdateSinglesConfig,
 } from './types';
+import { finishDatabaseCleanup } from './files';
+
+export type DatabaseOpenMode = 'create' | 'existing';
 
 /**
  * # DatabaseCore
@@ -52,7 +56,10 @@ export default class DatabaseCore extends DatabaseBase {
   schemaMap: SchemaMap = {};
   connectionParams: Knex.Config;
 
-  constructor(dbPath?: string) {
+  constructor(
+    dbPath?: string,
+    private readonly openMode: DatabaseOpenMode = 'existing'
+  ) {
     super();
     this.dbPath = dbPath ?? ':memory:';
     this.connectionParams = {
@@ -65,9 +72,12 @@ export default class DatabaseCore extends DatabaseBase {
     };
   }
 
-  static async getCountryCode(dbPath: string): Promise<string> {
+  static async getCountryCode(
+    dbPath: string,
+    openMode: DatabaseOpenMode = 'existing'
+  ): Promise<string> {
     let countryCode = 'in';
-    const db = new DatabaseCore(dbPath);
+    const db = new DatabaseCore(dbPath, openMode);
     await db.connect();
 
     let query: { value: string }[] = [];
@@ -94,11 +104,33 @@ export default class DatabaseCore extends DatabaseBase {
 
   async connect() {
     this.knex = knex(this.connectionParams);
-    await this.knex.raw('PRAGMA foreign_keys=ON');
+    if (this.openMode === 'existing' && this.dbPath !== ':memory:') {
+      const filename = this.dbPath;
+      // Knex's better-sqlite3 client does not pass driver options through.
+      const client = this.knex.client as Knex.Client;
+      client.acquireRawConnection = () =>
+        Promise.resolve().then(
+          () => new BetterSQLite3(filename, { fileMustExist: true })
+        );
+    }
+    try {
+      await this.knex.raw('PRAGMA foreign_keys=ON');
+    } catch (error) {
+      await finishDatabaseCleanup(error, [
+        async () => {
+          await this.knex!.destroy();
+          this.knex = undefined;
+        },
+      ]);
+      throw error;
+    }
   }
 
   async close() {
-    await this.knex!.destroy();
+    const knex = this.knex;
+    if (!knex) return;
+    await knex.destroy();
+    this.knex = undefined;
   }
 
   async migrate(config: MigrationConfig = {}) {

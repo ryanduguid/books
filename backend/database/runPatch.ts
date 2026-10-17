@@ -21,40 +21,55 @@ async function runPatch(
   version: string
 ): Promise<boolean> {
   let failed = false;
+  let primaryError: unknown;
   try {
     await patch.patch.execute(dm);
   } catch (error) {
     failed = true;
+    primaryError = error;
     if (error instanceof Error) {
       error.message = `Patch Failed: ${patch.name}\n${error.message}`;
       emitMainProcessError(error, { patchName: patch.name, notifyUser: false });
     }
   }
 
-  await makeEntry(patch.name, version, failed, dm);
+  try {
+    await makeEntry(patch, version, failed, dm);
+  } catch (error) {
+    if (!failed) throw error;
+    if (primaryError instanceof Error) {
+      const previous =
+        (primaryError as Error & { cleanupErrors?: string[] }).cleanupErrors ??
+        [];
+      Object.assign(primaryError, {
+        cleanupErrors: [...previous, String(error)],
+      });
+    }
+  }
+  if (failed) throw primaryError;
   return true;
 }
 
 async function makeEntry(
-  patchName: string,
+  patch: Patch,
   version: string,
   failed: boolean,
   dm: DatabaseManager
 ) {
-  const defaultFieldValueMap = getDefaultMetaFieldValueMap() as FieldValueMap;
-
-  defaultFieldValueMap.name = patchName;
-  defaultFieldValueMap.failed = failed;
-  defaultFieldValueMap.version = version;
-
-  try {
-    await dm.db!.insert('PatchRun', defaultFieldValueMap);
-  } catch {
-    /**
-     * Error is thrown if PatchRun table hasn't been migrated.
-     * In this case, PatchRun will migrated post pre-migration-patches
-     * are run and rerun the patch.
-     */
+  if (!dm.db?.knex)
+    throw new Error('Cannot record PatchRun without an open database.');
+  if (
+    patch.patch.beforeMigrate &&
+    !(await dm.db.knex.schema.hasTable('PatchRun'))
+  )
     return;
+  const outcome = { name: patch.name, failed, version };
+  if (await dm.db.exists('PatchRun', patch.name)) {
+    await dm.db.update('PatchRun', outcome);
+  } else {
+    await dm.db.insert('PatchRun', {
+      ...(getDefaultMetaFieldValueMap() as FieldValueMap),
+      ...outcome,
+    });
   }
 }

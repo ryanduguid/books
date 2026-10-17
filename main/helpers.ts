@@ -7,6 +7,13 @@ import { BackendResponse } from 'utils/ipc/types';
 import { IPC_CHANNELS } from 'utils/messages';
 import type { ConfigFilesWithModified } from 'utils/types';
 
+export function displayFilePath(targetPath: string) {
+  return JSON.stringify(targetPath).replace(
+    /[\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
+}
+
 export async function setAndGetCleanedConfigFiles() {
   const files = config.get('files', []);
 
@@ -63,6 +70,8 @@ export async function getErrorHandledReponse(
       message: (err as NodeJS.ErrnoException).message,
       stack: (err as NodeJS.ErrnoException).stack,
       code: (err as NodeJS.ErrnoException).code,
+      cleanupErrors: (err as Error & { cleanupErrors?: string[] })
+        .cleanupErrors,
     };
   }
 

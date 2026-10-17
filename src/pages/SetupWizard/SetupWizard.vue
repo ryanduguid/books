@@ -222,7 +222,6 @@ export default defineComponent({
       }
 
       this.loading = true;
-      this.fyo.telemetry.log(Verb.Completed, ModelNameEnum.SetupWizard);
       this.$emit('setup-complete', this.doc.getValidDict());
     },
     cancel() {

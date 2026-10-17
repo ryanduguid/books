@@ -14,9 +14,11 @@ export class DatabaseDemux extends DatabaseDemuxBase {
     const response = await func();
 
     if (response.error?.name) {
-      const { name, message, stack } = response.error;
+      const { name, message, stack, code, cleanupErrors } = response.error;
       const dberror = new DatabaseError(`${name}\n${message}`);
       dberror.stack = stack;
+      dberror.code = code;
+      if (cleanupErrors) Object.assign(dberror, { cleanupErrors });
 
       throw dberror;
     }

@@ -1,14 +1,17 @@
 import type {
   OpenDialogOptions,
   OpenDialogReturnValue,
-  SaveDialogOptions,
   SaveDialogReturnValue,
 } from 'electron';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ConfigMap } from 'fyo/core/types';
 import config from 'utils/config';
 import type { DatabaseMethod } from 'utils/db/types';
-import type { BackendResponse } from 'utils/ipc/types';
+import type {
+  BackendResponse,
+  ExportFormat,
+  ExportSelection,
+} from 'utils/ipc/types';
 import { IPC_ACTIONS, IPC_CHANNELS, IPC_MESSAGES } from 'utils/messages';
 import type {
   ConfigFilesWithModified,
@@ -93,11 +96,12 @@ const ipc = {
     )) as SelectFileReturn;
   },
 
-  async getSaveFilePath(options: SaveDialogOptions) {
+  async getSaveFilePath(name: string, format: ExportFormat) {
     return (await ipcRenderer.invoke(
       IPC_ACTIONS.GET_SAVE_FILEPATH,
-      options
-    )) as SaveDialogReturnValue;
+      name,
+      format
+    )) as ExportSelection;
   },
 
   async getOpenFilePath(options: OpenDialogOptions) {
@@ -105,6 +109,31 @@ const ipc = {
       IPC_ACTIONS.GET_OPEN_FILEPATH,
       options
     )) as OpenDialogReturnValue;
+  },
+
+  async getOpenDatabaseFilePath(
+    operation: 'connect' | 'delete',
+    defaultPath?: string
+  ) {
+    return (await ipcRenderer.invoke(
+      IPC_ACTIONS.GET_OPEN_DATABASE_FILEPATH,
+      operation,
+      defaultPath
+    )) as OpenDialogReturnValue;
+  },
+
+  async getSaveDatabaseFilePath(defaultPath?: string) {
+    return (await ipcRenderer.invoke(
+      IPC_ACTIONS.GET_SAVE_DATABASE_FILEPATH,
+      defaultPath
+    )) as SaveDialogReturnValue;
+  },
+
+  async getDbRecoveryPath(dbPath: string) {
+    return (await ipcRenderer.invoke(
+      IPC_ACTIONS.GET_DB_RECOVERY_PATH,
+      dbPath
+    )) as string | undefined;
   },
 
   async checkDbAccess(filePath: string) {
@@ -129,8 +158,8 @@ const ipc = {
     )) as BackendResponse;
   },
 
-  async saveData(data: string, savePath: string) {
-    await ipcRenderer.invoke(IPC_ACTIONS.SAVE_DATA, data, savePath);
+  async saveData(data: string, savePath: string, grantId: string) {
+    await ipcRenderer.invoke(IPC_ACTIONS.SAVE_DATA, data, savePath, grantId);
   },
 
   showItemInFolder(filePath: string) {
@@ -141,14 +170,16 @@ const ipc = {
     html: string,
     savePath: string,
     width: number,
-    height: number
+    height: number,
+    grantId: string
   ): Promise<boolean> {
     return (await ipcRenderer.invoke(
       IPC_ACTIONS.SAVE_HTML_AS_PDF,
       html,
       savePath,
       width,
-      height
+      height,
+      grantId
     )) as boolean;
   },
 

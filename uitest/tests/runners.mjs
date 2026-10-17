@@ -222,7 +222,7 @@ function assertLifecycle(t, mode, result, observation) {
     );
     t.match(
       result.stdout,
-      /passing:\s+6/,
+      /passing:\s+11/,
       'formatted results drain before exit'
     );
   }
